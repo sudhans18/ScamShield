@@ -6,12 +6,14 @@ from .entity_extractor import extract_entities
 from .llm_classifier import classify_with_llm
 from .risk_scorer import calculate_risk
 from .scam_rules import detect_scam_signals
+from app.services.reputation.phone_reputation import check_phone_reputation
 
 SIGNAL_REASON_MAP: dict[str, str] = {
     "fee_requested": "registration fee requested",
     "urgency_language": "urgency language detected",
     "salary_anomaly": "salary anomaly",
     "unknown_company": "company not identified",
+    "known_scam_number": "known_scam_number",
 }
 
 
@@ -67,6 +69,20 @@ def analyze_text(text: str) -> dict[str, Any]:
         signal_result = detect_scam_signals(text, entities)
         signals = list(signal_result.get("signals", []))
 
+        phones = entities.get("phones", [])
+        reputation_data: dict[str, Any] | None = None
+        if isinstance(phones, list) and phones:
+            try:
+                reputation_data = check_phone_reputation(str(phones[0]))
+                if (
+                    reputation_data
+                    and float(reputation_data.get("trust_score") or 0) > 3
+                    and "known_scam_number" not in signals
+                ):
+                    signals.append("known_scam_number")
+            except Exception:  # pragma: no cover
+                reputation_data = None
+
         risk_result = calculate_risk(signals)
 
         result: dict[str, Any] = {
@@ -75,6 +91,13 @@ def analyze_text(text: str) -> dict[str, Any]:
             "reasons": _signals_to_reasons(signals),
             "entities": entities,
         }
+
+        if reputation_data and float(reputation_data.get("trust_score") or 0) > 3:
+            boosted_score = max(float(result["risk_score"]), 0.9)
+            result["risk_score"] = round(boosted_score, 2)
+            result["risk_level"] = "HIGH"
+            result["reasons"] = _signals_to_reasons(signals)
+            result["phone_reputation"] = reputation_data
 
         score = float(result["risk_score"])
         if 0.3 <= score <= 0.6:
