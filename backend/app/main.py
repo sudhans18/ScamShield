@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from app.routes.scam_routes import router as scam_router
 from app.routes.analyze import router as analyze_router
 
 app = FastAPI(
@@ -8,6 +9,7 @@ app = FastAPI(
 )
 
 app.include_router(analyze_router)
+app.include_router(scam_router)
 
 @app.get("/")
 def root():
