@@ -3,6 +3,27 @@ import * as d3 from 'd3';
 
 const NetworkGraph = ({ data, loading }) => {
   const svgRef = useRef(null);
+  const containerRef = useRef(null);
+  const zoomRef = useRef(null);
+
+  const handleResetView = () => {
+    if (!svgRef.current || !zoomRef.current) return;
+    d3.select(svgRef.current)
+      .transition()
+      .duration(500)
+      .call(zoomRef.current.transform, d3.zoomIdentity);
+  };
+
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().catch(err => {
+        console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  };
 
   useEffect(() => {
     if (loading || !data || !svgRef.current) return;
@@ -16,6 +37,17 @@ const NetworkGraph = ({ data, loading }) => {
     const svg = d3.select(svgRef.current)
       .attr("width", width)
       .attr("height", height);
+
+    const g = svg.append("g");
+
+    const zoom = d3.zoom()
+      .scaleExtent([0.5, 5])
+      .on("zoom", (event) => {
+          g.attr("transform", event.transform);
+      });
+
+    zoomRef.current = zoom;
+    svg.call(zoom);
 
     // Deep copy data to avoid mutating props
     const nodes = data.nodes.map(d => ({ ...d }));
@@ -32,7 +64,7 @@ const NetworkGraph = ({ data, loading }) => {
       .force("collide", d3.forceCollide().radius(30));
 
     // Links container
-    const link = svg.append("g")
+    const link = g.append("g")
       .selectAll("line")
       .data(links)
       .join("line")
@@ -40,7 +72,7 @@ const NetworkGraph = ({ data, loading }) => {
       .attr("stroke-width", d => Math.sqrt(d.value) * 1.5);
 
     // Nodes container
-    const node = svg.append("g")
+    const node = g.append("g")
       .selectAll("g")
       .data(nodes)
       .join("g")
@@ -97,18 +129,18 @@ const NetworkGraph = ({ data, loading }) => {
         event.subject.fx = event.subject.x;
         event.subject.fy = event.subject.y;
       }
-      
+
       function dragged(event) {
         event.subject.fx = event.x;
         event.subject.fy = event.y;
       }
-      
+
       function dragended(event) {
         if (!event.active) simulation.alphaTarget(0);
         event.subject.fx = null;
         event.subject.fy = null;
       }
-      
+
       return d3.drag()
         .on("start", dragstarted)
         .on("drag", dragged)
@@ -121,37 +153,55 @@ const NetworkGraph = ({ data, loading }) => {
   }, [data, loading]);
 
   if (loading) {
-     return (
-        <div className="glassmorphism rounded-2xl p-6 h-full min-h-[654px] flex flex-col justify-center items-center">
-          <div className="animate-pulse flex flex-col items-center gap-4">
-            <div className="flex gap-4">
-              <div className="w-8 h-8 rounded-full bg-primary/40"></div>
-              <div className="w-16 h-1 bg-white/10 self-center"></div>
-              <div className="w-12 h-12 rounded-full bg-danger/40"></div>
-            </div>
-            <div className="w-1 h-16 bg-white/10"></div>
-            <div className="w-10 h-10 rounded-full bg-warning/40"></div>
+    return (
+      <div className="glassmorphism rounded-2xl p-6 h-full min-h-[654px] flex flex-col justify-center items-center">
+        <div className="animate-pulse flex flex-col items-center gap-4">
+          <div className="flex gap-4">
+            <div className="w-8 h-8 rounded-full bg-primary/40"></div>
+            <div className="w-16 h-1 bg-white/10 self-center"></div>
+            <div className="w-12 h-12 rounded-full bg-danger/40"></div>
           </div>
-          <p className="text-gray-500 mt-6 text-sm font-medium">Analyzing Network...</p>
+          <div className="w-1 h-16 bg-white/10"></div>
+          <div className="w-10 h-10 rounded-full bg-warning/40"></div>
         </div>
-      );
+        <p className="text-gray-500 mt-6 text-sm font-medium">Analyzing Network...</p>
+      </div>
+    );
   }
 
   return (
-    <div className="glassmorphism rounded-2xl p-4 h-full min-h-[654px] flex flex-col shadow-xl border border-white/10 relative overflow-hidden">
+    <div ref={containerRef} className="glassmorphism rounded-2xl p-4 h-full min-h-[654px] flex flex-col shadow-xl border border-white/10 relative overflow-hidden bg-background">
       <div className="flex justify-between items-center mb-2 px-2 z-10">
         <div>
           <h3 className="text-xl font-bold tracking-tight">Scam Syndicate Network</h3>
           <p className="text-sm text-gray-400">Force-directed graph of connections</p>
         </div>
-        <div className="flex gap-4 text-xs">
-          <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-primary"></span> Phone</div>
-          <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-secondary"></span> UPI</div>
-          <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-warning"></span> Agent</div>
-          <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-danger"></span> Company</div>
+        <div className="flex items-center gap-4">
+          <div className="flex gap-4 text-xs">
+            <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-primary"></span> Phone</div>
+            <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-secondary"></span> UPI</div>
+            <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-warning"></span> Agent</div>
+            <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-danger"></span> Company</div>
+          </div>
+          <div className="flex gap-2">
+            <button 
+              onClick={handleResetView}
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs font-medium backdrop-blur-md border border-white/10 transition-colors flex items-center gap-1"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+              Reset View
+            </button>
+            <button 
+              onClick={toggleFullscreen}
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-xs font-medium backdrop-blur-md border border-white/10 transition-colors flex items-center gap-1"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 3 6 6"/><path d="m9 21-6-6"/><path d="M21 3v6h-6"/><path d="M3 21v-6h6"/><path d="m21 3-7.5 7.5"/><path d="m3 21 7.5-7.5"/></svg>
+              Fullscreen
+            </button>
+          </div>
         </div>
       </div>
-      
+
       <div className="flex-1 w-full bg-card/30 rounded-xl relative border border-white/5 cursor-move">
         <svg ref={svgRef} className="w-full h-full" />
       </div>
