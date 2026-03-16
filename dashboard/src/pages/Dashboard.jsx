@@ -5,6 +5,7 @@ import TrendChart from '../components/TrendChart';
 import HeatMap from '../components/HeatMap';
 import NetworkGraph from '../components/NetworkGraph';
 import ReportTable from '../components/ReportTable';
+import RiskDistribution from '../components/RiskDistribution';
 import { fetchStats, fetchReports, fetchHeatmap, fetchTrends, fetchNetwork } from '../services/api';
 
 const Dashboard = () => {
@@ -91,24 +92,25 @@ const Dashboard = () => {
         />
       </div>
 
-      {/* Charts Area Top */}
+      {/* Charts Area - Row 2 & 3 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-1 flex flex-col gap-6">
           <TrendChart data={data.trends} loading={loading} />
+          <RiskDistribution />
         </div>
-        <div className="lg:col-span-1">
-          <HeatMap data={data.heatmap} loading={loading} />
+        <div className="lg:col-span-2">
+          <NetworkGraph data={data.network} loading={loading} />
         </div>
       </div>
 
-      {/* Charts Area Bottom */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1">
-          <NetworkGraph data={data.network} loading={loading} />
-        </div>
-        <div className="lg:col-span-2">
-          <ReportTable reports={data.reports} loading={loading} />
-        </div>
+      {/* HeatMap - Row 4 */}
+      <div className="w-full">
+        <HeatMap data={data.heatmap} loading={loading} />
+      </div>
+
+      {/* Reports Table - Row 5 */}
+      <div className="w-full">
+        <ReportTable reports={data.reports} loading={loading} />
       </div>
     </div>
   );

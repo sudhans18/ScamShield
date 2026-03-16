@@ -11,7 +11,7 @@ const NetworkGraph = ({ data, loading }) => {
     d3.select(svgRef.current).selectAll("*").remove();
 
     const width = svgRef.current.clientWidth;
-    const height = 400; // Fixed height
+    const height = svgRef.current.parentElement.clientHeight || 654;
 
     const svg = d3.select(svgRef.current)
       .attr("width", width)
@@ -122,7 +122,7 @@ const NetworkGraph = ({ data, loading }) => {
 
   if (loading) {
      return (
-        <div className="glassmorphism rounded-2xl p-6 h-[450px] flex flex-col justify-center items-center">
+        <div className="glassmorphism rounded-2xl p-6 h-full min-h-[654px] flex flex-col justify-center items-center">
           <div className="animate-pulse flex flex-col items-center gap-4">
             <div className="flex gap-4">
               <div className="w-8 h-8 rounded-full bg-primary/40"></div>
@@ -138,7 +138,7 @@ const NetworkGraph = ({ data, loading }) => {
   }
 
   return (
-    <div className="glassmorphism rounded-2xl p-4 h-[450px] flex flex-col shadow-xl border border-white/10 relative overflow-hidden">
+    <div className="glassmorphism rounded-2xl p-4 h-full min-h-[654px] flex flex-col shadow-xl border border-white/10 relative overflow-hidden">
       <div className="flex justify-between items-center mb-2 px-2 z-10">
         <div>
           <h3 className="text-xl font-bold tracking-tight">Scam Syndicate Network</h3>
