@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.models.schemas import ScamReportCreate
+from app.services.reputation.phone_reputation import upsert_phone_reputation
 from app.services.supabase_client import supabase
 
 
@@ -36,5 +38,21 @@ def store_scam_report(
     _ = reporter_hash
     result = supabase.table("scam_reports").insert(payload).execute()
     data = result.data or []
+    if scam_phone:
+        upsert_phone_reputation(scam_phone)
     return data[0] if data else payload
 
+
+def create_scam_report(report: ScamReportCreate) -> dict[str, Any]:
+    payload = report.model_dump(exclude_none=True)
+    payload.setdefault("report_time", datetime.now(timezone.utc).isoformat())
+
+    result = supabase.table("scam_reports").insert(payload).execute()
+    data = result.data or []
+    created = data[0] if data else payload
+
+    scam_phone = created.get("scam_phone")
+    if scam_phone:
+        upsert_phone_reputation(str(scam_phone))
+
+    return created

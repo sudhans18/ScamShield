@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from anyio import to_thread
@@ -41,6 +42,18 @@ def check_phone_reputation(phone: str) -> dict[str, Any]:
     """Synchronous reputation lookup (matches existing sync pipeline)."""
     reports = _fetch_reports(phone)
     return _calculate_from_reports(phone=phone, reports=reports)
+
+
+def upsert_phone_reputation(phone: str) -> dict[str, Any]:
+    reputation = check_phone_reputation(phone)
+    payload = {
+        "phone_number": phone,
+        "report_count": reputation["report_count"],
+        "trust_score": reputation["trust_score"],
+        "last_reported": datetime.now(UTC).isoformat(),
+    }
+    supabase.table("phone_reputation").upsert(payload).execute()
+    return reputation
 
 
 async def check_phone_reputation_async(phone: str) -> dict[str, Any]:
