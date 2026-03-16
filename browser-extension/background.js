@@ -1,13 +1,23 @@
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "ANALYZE") {
-    fetch("http://127.0.0.1:8000/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: message.text, source: "browser" })
-    })
-    .then(res => res.json())
-    .then(data => sendResponse({ success: true, data }))
-    .catch(err => sendResponse({ success: false, error: err.message }));
-    return true;
+{
+  "manifest_version": 3,
+  "name": "Job Scam Detector",
+  "version": "1.0",
+  "description": "Detects potential job scams on websites",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:8000/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Job Scam Detector"
   }
-});
+}
