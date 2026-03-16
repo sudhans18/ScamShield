@@ -29,6 +29,8 @@ import shutil
 from pathlib import Path
 from typing import Union
 
+from voice.whisper_transcriber import transcribe_audio_with_meta
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -40,7 +42,7 @@ MAX_DURATION_SECONDS = 300                 # 5 minutes max — scam voice notes 
 # "base"  → fast, decent Hindi. Good for hackathon demo.
 # "small" → better Hindi accuracy, ~2x slower. Recommended for production.
 # Change this one line to upgrade.
-WHISPER_MODEL_SIZE = "small"
+WHISPER_MODEL_SIZE = "tiny"
 
 # Languages Whisper will try to detect/transcribe.
 # None = auto-detect (slower). "hi" = force Hindi. "en" = force English.
@@ -73,6 +75,16 @@ def _get_whisper_model():
             )
             raise
     return _whisper_model
+
+
+def preload_whisper_model() -> bool:
+    """Preload Whisper model during app startup. Never raises."""
+    try:
+        # Model is preloaded on import in voice.whisper_transcriber.
+        return True
+    except Exception as exc:  # pragma: no cover
+        logger.warning("audio_pipeline: Whisper preload failed - %s", exc)
+        return False
 
 
 # ── Main pipeline function ────────────────────────────────────────────────────
@@ -215,25 +227,15 @@ def _transcribe(audio_path: str) -> dict:
     Returns transcript + metadata.
     """
     try:
-        model = _get_whisper_model()
-
-        result = model.transcribe(
-            audio_path,
-            language=WHISPER_LANGUAGE,      # None = auto-detect
-            task="transcribe",              # "transcribe" keeps original language
-                                            # "translate" → translates to English (alternative)
-            fp16=False,                     # fp16=False for CPU servers (Railway free tier)
-            verbose=False,
-        )
-
-        transcript = result.get("text", "").strip()
-        detected_lang = result.get("language", "unknown")
+        result = transcribe_audio_with_meta(audio_path)
+        transcript = str(result.get("text", "")).strip()
+        detected_lang = str(result.get("language", "unknown"))
 
         # Calculate average log probability as a rough confidence signal
         segments = result.get("segments", [])
-        if segments:
-            avg_logprob = sum(s.get("avg_logprob", 0) for s in segments) / len(segments)
-            duration = segments[-1].get("end", 0)
+        if isinstance(segments, list) and segments:
+            avg_logprob = sum(float(s.get("avg_logprob", 0)) for s in segments) / len(segments)
+            duration = float(segments[-1].get("end", 0) or 0)
         else:
             avg_logprob = 0.0
             duration = 0.0
@@ -247,7 +249,7 @@ def _transcribe(audio_path: str) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"audio_pipeline: Whisper transcription failed — {e}")
+        logger.error(f"audio_pipeline: Whisper transcription failed - {e}")
         return {"success": False, "error": f"Transcription failed: {str(e)}"}
 
 

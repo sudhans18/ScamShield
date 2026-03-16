@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import mimetypes
 from typing import Any
 
 import requests
@@ -96,6 +97,10 @@ def _analyze_media(media_url: str, content_type: str) -> dict[str, Any]:
     media_resp.raise_for_status()
 
     filename = media_url.rstrip("/").split("/")[-1] or "upload.bin"
+    if "." not in filename:
+        guessed_ext = mimetypes.guess_extension((content_type or "").split(";")[0].strip().lower())
+        if guessed_ext:
+            filename = f"{filename}{guessed_ext}"
     files = {"file": (filename, media_resp.content, content_type or "application/octet-stream")}
     response = requests.post(
         f"{BACKEND_BASE_URL}{endpoint}",
