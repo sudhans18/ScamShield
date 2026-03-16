@@ -1,15 +1,8 @@
-NaukariSaathi Backend API
+NaukariSaathi (ScamShield) Docs
 
-POST /analyze
+This repo now has expanded documentation:
 
-Request
-{
-  "text": "job message"
-}
-
-Response
-{
-  "risk_score": 0.82,
-  "risk_level": "HIGH",
-  "reasons": []
-}
+- See `docs/API_REFERENCE.md` for all endpoints (backend, AI service, Twilio webhooks).
+- See `docs/PROJECT_STATUS.md` for “completed vs remaining” mapped to the PDF spec.
+- See `docs/SETUP_AND_CONFIG.md` for running the services and required environment variables.
+- See `docs/DATABASE_SCHEMA.md` for the Supabase tables used by the backend.

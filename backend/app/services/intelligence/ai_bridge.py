@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 import os
+import re
 
 import requests
 
@@ -10,6 +11,26 @@ from app.services.intelligence.analyzer import analyze_text as local_analyze_tex
 AI_SERVICE_BASE_URL = os.getenv("AI_SERVICE_BASE_URL", "http://127.0.0.1:8001").rstrip("/")
 AI_TIMEOUT_SECONDS = 5.0
 AI_MEDIA_TIMEOUT_SECONDS = float(os.getenv("AI_MEDIA_TIMEOUT", "30"))
+_DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
+_HINDI_ROMAN_TOKENS = {
+    "hai",
+    "nahi",
+    "nahin",
+    "kya",
+    "kyu",
+    "kyun",
+    "kaise",
+    "kripya",
+    "aap",
+    "hum",
+    "paise",
+    "bhejo",
+    "bhejiye",
+    "jaldi",
+    "naukri",
+    "farzi",
+    "dhokha",
+}
 
 
 def _risk_level_from_score(score: float) -> str:
@@ -95,12 +116,32 @@ def _normalize_analysis_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(scam_entities, dict):
         entities_data = {**scam_entities, **entities_data}
 
-    return {
+    result = {
         "risk_score": score,
         "risk_level": risk_level,
         "reasons": [str(reason) for reason in reasons if str(reason).strip()],
         "entities": _normalize_entities(entities_data),
     }
+    if isinstance(payload.get("hindi_verdict"), str):
+        result["hindi_verdict"] = payload["hindi_verdict"]
+    if isinstance(payload.get("english_summary"), str):
+        result["english_summary"] = payload["english_summary"]
+    return result
+
+
+def _detect_language(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return "en"
+    if _DEVANAGARI_RE.search(cleaned):
+        return "hi"
+    words = re.findall(r"[a-zA-Z']+", cleaned.lower())
+    if not words:
+        return "en"
+    hindi_hits = sum(1 for word in words if word in _HINDI_ROMAN_TOKENS)
+    if hindi_hits >= 2 or (hindi_hits >= 1 and len(words) <= 6):
+        return "hi"
+    return "en"
 
 
 def call_ai_service(path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -189,7 +230,10 @@ def analyze_image_with_ai(
         raise RuntimeError("AI service unavailable for image OCR.")
     extracted_text = _extract_text_from_ai_payload(payload)
     if extracted_text:
-        return analyze_text_with_ai(extracted_text, source_channel=source_channel)
+        result = analyze_text_with_ai(extracted_text, source_channel=source_channel)
+        result["extracted_text"] = extracted_text
+        result["detected_input_language"] = _detect_language(extracted_text)
+        return result
     result = _normalize_analysis_payload(payload)
     result["source"] = "ai-services"
     return result
@@ -206,7 +250,13 @@ def analyze_audio_with_ai(
         raise RuntimeError("AI service unavailable for audio transcription.")
     extracted_text = _extract_text_from_ai_payload(payload)
     if extracted_text:
-        return analyze_text_with_ai(extracted_text, source_channel=source_channel)
+        result = analyze_text_with_ai(extracted_text, source_channel=source_channel)
+        result["extracted_text"] = extracted_text
+        result["detected_input_language"] = _detect_language(extracted_text)
+        language_name = payload.get("language_name")
+        if isinstance(language_name, str) and language_name.strip():
+            result["detected_audio_language_name"] = language_name.strip()
+        return result
     result = _normalize_analysis_payload(payload)
     result["source"] = "ai-services"
     return result
@@ -223,7 +273,10 @@ def analyze_document_with_ai(
         raise RuntimeError("AI service unavailable for document OCR.")
     extracted_text = _extract_text_from_ai_payload(payload)
     if extracted_text:
-        return analyze_text_with_ai(extracted_text, source_channel=source_channel)
+        result = analyze_text_with_ai(extracted_text, source_channel=source_channel)
+        result["extracted_text"] = extracted_text
+        result["detected_input_language"] = _detect_language(extracted_text)
+        return result
     result = _normalize_analysis_payload(payload)
     result["source"] = "ai-services"
     return result
