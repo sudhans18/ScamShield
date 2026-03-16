@@ -22,20 +22,26 @@ const Dashboard = () => {
     const loadDashboardData = async () => {
       try {
         setLoading(true);
-        const [statsData, reportsData, heatmapData, trendsData, networkData] = await Promise.all([
+        const [statsData, reportsData, heatmapData, trendsData, networkData] = await Promise.allSettled([
           fetchStats(),
           fetchReports(),
           fetchHeatmap(),
           fetchTrends(),
           fetchNetwork()
         ]);
-        
+
         setData({
-          stats: statsData,
-          reports: reportsData,
-          heatmap: heatmapData,
-          trends: trendsData,
-          network: networkData
+          stats: statsData.status === 'fulfilled' ? statsData.value : null,
+          reports: reportsData.status === 'fulfilled' ? reportsData.value : [],
+          heatmap: heatmapData.status === 'fulfilled' ? heatmapData.value : [],
+          trends: trendsData.status === 'fulfilled' ? trendsData.value : [],
+          network: networkData.status === 'fulfilled' ? networkData.value : { nodes: [], links: [] }
+        });
+
+        [statsData, reportsData, heatmapData, trendsData, networkData].forEach((result, index) => {
+          if (result.status === 'rejected') {
+            console.error(`Dashboard request ${index + 1} failed`, result.reason);
+          }
         });
       } catch (error) {
         console.error("Error loading dashboard data", error);
@@ -96,7 +102,7 @@ const Dashboard = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1 flex flex-col gap-6">
           <TrendChart data={data.trends} loading={loading} />
-          <RiskDistribution />
+          <RiskDistribution reports={data.reports} loading={loading} />
         </div>
         <div className="lg:col-span-2">
           <NetworkGraph data={data.network} loading={loading} />

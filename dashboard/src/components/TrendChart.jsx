@@ -26,7 +26,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 const TrendChart = ({ data, loading }) => {
   if (loading) {
     return (
-      <div className="glassmorphism rounded-2xl p-6 h-96 flex flex-col justify-center items-center">
+      <div className="glassmorphism rounded-2xl p-6 h-72 flex flex-col justify-center items-center">
         <div className="animate-pulse flex items-center gap-2">
           <div className="w-4 h-12 bg-primary/20 rounded-t" />
           <div className="w-4 h-24 bg-primary/20 rounded-t" />
@@ -41,8 +41,8 @@ const TrendChart = ({ data, loading }) => {
   }
 
   return (
-    <div className="glassmorphism rounded-2xl p-6 h-96 flex flex-col shadow-xl border border-white/10">
-      <div className="flex justify-between items-center mb-6">
+    <div className="glassmorphism rounded-2xl p-5 h-72 flex flex-col shadow-xl border border-white/10">
+      <div className="flex justify-between items-center mb-3">
         <div>
           <h3 className="text-xl font-bold tracking-tight">Scam Reports Trend</h3>
           <p className="text-sm text-gray-400">Daily volume of reported incidents</p>
