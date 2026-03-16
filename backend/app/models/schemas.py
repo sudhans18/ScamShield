@@ -1,15 +1,13 @@
-from __future__ import annotations
-
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 
 class AnalyzeRequest(BaseModel):
-    text: str
-    source: str = "dashboard"
+    text: Optional[str] = None
+    source: Optional[str] = "unknown"
 
 
 class ScamReportCreate(BaseModel):
@@ -93,3 +91,6 @@ class PhoneLookupResponse(BaseModel):
     upiIds: list[str]
     lastSeen: str
     recentReports: list[dict[str, Any]] = Field(default_factory=list)
+
+
+AnalyzeRequest.model_rebuild()

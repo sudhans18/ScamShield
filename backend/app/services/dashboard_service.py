@@ -151,6 +151,55 @@ def get_trend_data(days: int = 7) -> list[dict[str, Any]]:
 
 
 def get_network_graph(limit: int = 300) -> dict[str, list[dict[str, Any]]]:
+    try:
+        edge_result = (
+            supabase.table("scam_network_edges")
+            .select("entity_a, entity_b, entity_a_type, entity_b_type, weight")
+            .order("last_seen", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        edge_rows = edge_result.data or []
+        if edge_rows:
+            nodes: dict[str, dict[str, Any]] = {}
+            links: list[dict[str, Any]] = []
+
+            group_map = {"phone": 1, "upi": 2, "agent": 3}
+            label_map = {"phone": "Phone Number", "upi": "UPI ID", "agent": "Agent"}
+
+            for row in edge_rows:
+                left = str(row.get("entity_a") or "").strip()
+                right = str(row.get("entity_b") or "").strip()
+                if not left or not right:
+                    continue
+
+                left_type = str(row.get("entity_a_type") or "agent").strip().lower()
+                right_type = str(row.get("entity_b_type") or "agent").strip().lower()
+                if left not in nodes:
+                    nodes[left] = {
+                        "id": left,
+                        "group": group_map.get(left_type, 3),
+                        "label": label_map.get(left_type, "Entity"),
+                    }
+                if right not in nodes:
+                    nodes[right] = {
+                        "id": right,
+                        "group": group_map.get(right_type, 3),
+                        "label": label_map.get(right_type, "Entity"),
+                    }
+                links.append(
+                    {
+                        "source": left,
+                        "target": right,
+                        "value": int(row.get("weight") or 1),
+                    }
+                )
+
+            return {"nodes": list(nodes.values()), "links": links}
+    except Exception:
+        # Fallback to report-derived graph when edge table is unavailable.
+        pass
+
     reports = _fetch_reports(limit=limit)
     nodes: dict[str, dict[str, Any]] = {}
     links: dict[tuple[str, str], int] = defaultdict(int)

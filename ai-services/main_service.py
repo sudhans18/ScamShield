@@ -196,12 +196,26 @@ def _placeholder_classify(text: str, entities: dict) -> dict:
 
 # ── Shared analysis logic ─────────────────────────────────────────────────────
 
+def _first_amount(items: list) -> int | None:
+    if not items:
+        return None
+    first = items[0]
+    if isinstance(first, dict):
+        value = first.get("normalized")
+        if isinstance(value, (int, float)):
+            return int(value)
+        return None
+    if isinstance(first, (int, float)):
+        return int(first)
+    return None
+
+
 def _build_result(
     text: str,
     input_type: str,
     source_channel: str,
     processing_notes: list,
-    extra_metadata: dict = {},
+    extra_metadata: dict | None = None,
 ) -> AnalysisResult:
     """
     Core analysis logic shared by ALL endpoints.
@@ -314,9 +328,11 @@ def _build_result(
         english_summary=english_summary,
         reasons=classification.get("reasons", ["No specific flags detected"]),
         entities=entities,
+        scam_result=scam_result,
         input_type=input_type,
         source_channel=source_channel,
         processing_notes=processing_notes,
+        db_checks=db_checks,
     )
 
 
