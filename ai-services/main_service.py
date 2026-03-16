@@ -26,6 +26,7 @@ All responses follow the same schema (see AnalysisResult below).
 
 import os
 import logging
+import mimetypes
 import tempfile
 import shutil
 from pathlib import Path
@@ -35,13 +36,16 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+print("AI service starting...")
+
 # ── Our modules ───────────────────────────────────────────────────────────────
 from entity_extractor import extract_entities
 from image_pipeline import process_image
-from audio_pipeline import process_audio
+from audio_pipeline import preload_whisper_model, process_audio
 from doc_pipeline import process_document
 from models.scam_classifier import classify
 from validator import validate_entities
+from utils.safe_extract import first_or_none
 from utils.text_cleaner import clean_text
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -68,6 +72,13 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    """Preload heavy dependencies and emit startup logs."""
+    preload_whisper_model()
+    print("AI service ready")
 
 
 # ── Request / Response schemas ────────────────────────────────────────────────
@@ -166,7 +177,9 @@ def _placeholder_classify(text: str, entities: dict) -> dict:
     if entities.get("has_urgency"):
         score += 25
         flags = entities.get("urgency_flags", [])
-        reasons.append(f"Urgency language detected: '{flags[0]}'")
+        first_flag = first_or_none(flags)
+        if first_flag:
+            reasons.append(f"Urgency language detected: '{first_flag}'")
 
     gulf_locations = [
         loc for loc in entities.get("locations", [])
@@ -175,7 +188,9 @@ def _placeholder_classify(text: str, entities: dict) -> dict:
     ]
     if gulf_locations and not entities.get("company_names"):
         score += 15
-        reasons.append(f"Overseas job ({gulf_locations[0]}) with no verifiable company name")
+        first_gulf = first_or_none(gulf_locations)
+        if first_gulf:
+            reasons.append(f"Overseas job ({first_gulf}) with no verifiable company name")
 
     if entities.get("urls") and not entities.get("company_names"):
         score += 10
@@ -208,6 +223,54 @@ def _first_amount(items: list) -> int | None:
     if isinstance(first, (int, float)):
         return int(first)
     return None
+
+
+def _fallback_response(input_type: str, source_channel: str, reason: str) -> AnalysisResult:
+    """Return stable fallback response when analysis fails."""
+    return AnalysisResult(
+        success=False,
+        risk_score=50,
+        is_scam=False,
+        risk_label="SUSPICIOUS",
+        hindi_verdict="विवरण का विश्लेषण नहीं हो पाया, कृपया दोबारा प्रयास करें।",
+        english_summary="AI service fallback",
+        reasons=[reason or "AI service fallback"],
+        entities={
+            "phones": [],
+            "salary": [],
+            "fee": [],
+            "company": "",
+            "location": "",
+            "upi": [],
+        },
+        scam_result={
+            "text": "",
+            "entities": {
+                "salary": None,
+                "registration_fee": None,
+                "phone_number": None,
+                "company": None,
+                "location": None,
+            },
+            "scam_risk": "medium",
+        },
+        input_type=input_type,
+        source_channel=source_channel,
+        processing_notes=["fallback_response"],
+        db_checks={},
+    )
+
+
+def _filename_with_content_suffix(filename: str | None, content_type: str | None, default_name: str) -> str:
+    """Ensure uploaded files have a usable extension for pipeline format checks."""
+    name = (filename or "").strip() or default_name
+    if Path(name).suffix:
+        return name
+
+    guessed_ext = mimetypes.guess_extension((content_type or "").split(";")[0].strip().lower())
+    if guessed_ext:
+        return f"{name}{guessed_ext}"
+    return name
 
 
 def _build_result(
@@ -250,7 +313,11 @@ def _build_result(
         )
 
     # Step 2: Extract entities
-    entities = extract_entities(text)
+    try:
+        entities = extract_entities(text)
+    except Exception as exc:
+        logger.exception("Entity extraction failed")
+        return _fallback_response(input_type, source_channel, f"Entity parsing error: {exc}")
 
     # Step 3: Validate entities against DB and government registries
     # This adds a score_boost if any phone/UPI is in the scam DB
@@ -268,14 +335,21 @@ def _build_result(
         processing_notes.append("Database check unavailable — verdict based on AI analysis only")
 
     # Step 4: LLM classification (Groq → Gemini → rule-based)
-    classification = classify(
-        text=text,
-        entities=entities,
-        context=f"Input type: {input_type}, Channel: {source_channel}",
-    )
+    try:
+        classification = classify(
+            text=text,
+            entities=entities,
+            context=f"Input type: {input_type}, Channel: {source_channel}",
+        )
+    except Exception as exc:
+        logger.exception("Classifier failed")
+        return _fallback_response(input_type, source_channel, f"Classification error: {exc}")
 
     # Step 5: Merge LLM score + DB boost
-    base_score = classification.get("risk_score", 0)
+    try:
+        base_score = int(float(classification.get("risk_score", 0)))
+    except Exception:
+        base_score = 0
     final_score = min(base_score + score_boost, 100)
 
     # Determine label from final score
@@ -303,14 +377,20 @@ def _build_result(
 
     # Step 6: Assemble result
     # Build the exact ScamResult format from the project spec
+    phone_number = first_or_none(entities.get("phones"))
+    company_name = first_or_none(entities.get("company_names"))
+    location_name = first_or_none(entities.get("locations"))
+    print("Extracted entities:", entities)
+    print("Risk score:", final_score)
+
     scam_result = {
         "text": text,
         "entities": {
             "salary":            _first_amount(entities.get("salaries", [])),
             "registration_fee":  _first_amount(entities.get("fees", [])),
-            "phone_number":      entities.get("phones", [None])[0],
-            "company":           entities.get("company_names", [None])[0],
-            "location":          entities.get("locations", [None])[0],
+            "phone_number":      phone_number,
+            "company":           company_name,
+            "location":          location_name,
         },
         "scam_risk": (
             "high"   if final_score >= 65 else
@@ -371,12 +451,16 @@ def analyse_text(request: TextRequest):
         f"district={request.worker_district} | len={len(request.text)}"
     )
 
-    return _build_result(
-        text=request.text,
-        input_type="text",
-        source_channel=request.source_channel or "unknown",
-        processing_notes=[],
-    )
+    try:
+        return _build_result(
+            text=request.text,
+            input_type="text",
+            source_channel=request.source_channel or "unknown",
+            processing_notes=[],
+        )
+    except Exception as exc:
+        logger.exception("analyse/text failed")
+        return _fallback_response("text", request.source_channel or "unknown", str(exc))
 
 
 @app.post("/analyse/image", response_model=AnalysisResult)
@@ -394,7 +478,8 @@ async def analyse_image(file: UploadFile = File(...)):
     processing_notes = []
 
     # Save uploaded file to a temp location for processing
-    suffix = Path(file.filename or "upload.jpg").suffix.lower()
+    safe_name = _filename_with_content_suffix(file.filename, file.content_type, "upload.jpg")
+    suffix = Path(safe_name).suffix.lower() or ".jpg"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
@@ -404,10 +489,7 @@ async def analyse_image(file: UploadFile = File(...)):
         image_result = process_image(tmp_path)
 
         if not image_result["success"]:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Image processing failed: {image_result.get('error', 'Unknown error')}",
-            )
+            return _fallback_response("image", "whatsapp", "Image processing failed")
 
         extracted_text = image_result["extracted_text"]
 
@@ -433,6 +515,9 @@ async def analyse_image(file: UploadFile = File(...)):
             source_channel="whatsapp",
             processing_notes=processing_notes,
         )
+    except Exception as exc:
+        logger.exception("analyse/image failed")
+        return _fallback_response("image", "whatsapp", str(exc))
 
     finally:
         # Always clean up the temp file
@@ -457,7 +542,8 @@ async def analyse_audio(file: UploadFile = File(...)):
     logger.info(f"analyse/audio | filename={file.filename}")
 
     # Save upload to temp file
-    suffix = Path(file.filename or "audio.ogg").suffix.lower() or ".ogg"
+    safe_name = _filename_with_content_suffix(file.filename, file.content_type, "audio.ogg")
+    suffix = Path(safe_name).suffix.lower() or ".ogg"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
@@ -466,10 +552,7 @@ async def analyse_audio(file: UploadFile = File(...)):
         audio_result = process_audio(tmp_path)
 
         if not audio_result["success"]:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Audio processing failed: {audio_result.get('error', 'Unknown error')}",
-            )
+            return _fallback_response("audio", "whatsapp", "Audio processing failed")
 
         transcript = audio_result["transcript"]
         lang = audio_result.get("language_name", "Unknown")
@@ -491,6 +574,9 @@ async def analyse_audio(file: UploadFile = File(...)):
             source_channel="whatsapp",
             processing_notes=processing_notes,
         )
+    except Exception as exc:
+        logger.exception("analyse/audio failed")
+        return _fallback_response("audio", "whatsapp", str(exc))
 
     finally:
         if os.path.exists(tmp_path):
@@ -514,7 +600,7 @@ async def analyse_document(file: UploadFile = File(...)):
     processing_notes = []
     logger.info(f"analyse/document | filename={file.filename}")
 
-    filename = file.filename or "document.pdf"
+    filename = _filename_with_content_suffix(file.filename, file.content_type, "document.pdf")
     suffix = Path(filename).suffix.lower() or ".pdf"
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -525,10 +611,7 @@ async def analyse_document(file: UploadFile = File(...)):
         doc_result = process_document(tmp_path, filename=filename)
 
         if not doc_result["success"]:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Document processing failed: {doc_result.get('error', 'Unknown error')}",
-            )
+            return _fallback_response("document", "whatsapp", "Document processing failed")
 
         extracted_text = doc_result["extracted_text"]
         forgery_risk = doc_result.get("forgery_risk", "unknown")
@@ -559,6 +642,9 @@ async def analyse_document(file: UploadFile = File(...)):
             source_channel="whatsapp",
             processing_notes=processing_notes,
         )
+    except Exception as exc:
+        logger.exception("analyse/document failed")
+        return _fallback_response("document", "whatsapp", str(exc))
 
     finally:
         if os.path.exists(tmp_path):
@@ -569,3 +655,5 @@ async def analyse_document(file: UploadFile = File(...)):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main_service:app", host="0.0.0.0", port=8001, reload=True)
+
+

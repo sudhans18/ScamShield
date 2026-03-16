@@ -29,6 +29,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from utils.safe_extract import first_or_none
+
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -84,7 +86,7 @@ def validate_entities(entities: dict) -> dict:
 
     phones_results = [_check_phone(p) for p in phones]
     upi_results    = [_check_upi(u) for u in upi_ids]
-    company_result = _check_company(companies[0] if companies else None)
+    company_result = _check_company(first_or_none(companies))
 
     score_boost = 0
     notes: list[str] = []
@@ -110,9 +112,10 @@ def validate_entities(entities: dict) -> dict:
             notes.append(f"UPI ID {ur['upi_id']} is linked to reported scam activity")
 
     # Company MCA miss
-    if not company_result.get("mca_verified") and companies:
+    first_company = first_or_none(companies)
+    if not company_result.get("mca_verified") and first_company:
         score_boost += 8
-        notes.append(f"Company '{companies[0]}' not found in MCA registry")
+        notes.append(f"Company '{first_company}' not found in MCA registry")
 
     if not notes:
         notes.append("No matches found in scam database — verdict based on AI analysis only")
@@ -163,7 +166,7 @@ def _supabase_phone_lookup(phone_hash: str) -> Optional[dict]:
             timeout=API_TIMEOUT,
         )
         if resp.status_code == 200 and resp.json():
-            row = resp.json()[0]
+            row = first_or_none(resp.json()) or {}
             trust_raw = float(row.get("cumulative_trust_weight", 0))
             # Apply temporal decay
             created_str = row.get("created_at", "")
@@ -199,7 +202,8 @@ def _check_upi(upi_id: str) -> dict:
         )
         if resp.status_code == 200 and resp.json():
             result["is_reported"] = True
-            result["report_count"] = resp.json()[0].get("report_count", 1)
+            first_row = first_or_none(resp.json()) or {}
+            result["report_count"] = first_row.get("report_count", 1)
             result["status"] = "flagged"
     except Exception as e:
         logger.warning(f"validator: UPI lookup failed — {e}")
@@ -226,7 +230,8 @@ def _mca_check(name: str) -> dict:
             "https://www.mca.gov.in/mcafoportal/viewCompanyMasterData.do",
             params={"companyName": name}, timeout=API_TIMEOUT,
         )
-        if resp.status_code == 200 and name.split()[0].lower() in resp.text.lower():
+        company_head = first_or_none(name.split()) or ""
+        if resp.status_code == 200 and company_head.lower() in resp.text.lower():
             return {"verified": True, "message": "Found in MCA registry"}
         return {"verified": False, "message": "Not found in MCA registry"}
     except Exception as e:

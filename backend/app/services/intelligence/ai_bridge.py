@@ -9,6 +9,7 @@ from app.services.intelligence.analyzer import analyze_text as local_analyze_tex
 
 AI_SERVICE_BASE_URL = os.getenv("AI_SERVICE_BASE_URL", "http://127.0.0.1:8001").rstrip("/")
 AI_TIMEOUT_SECONDS = 5.0
+AI_MEDIA_TIMEOUT_SECONDS = float(os.getenv("AI_MEDIA_TIMEOUT", "30"))
 
 
 def _risk_level_from_score(score: float) -> str:
@@ -128,7 +129,7 @@ def _call_ai_service_file(
         response = requests.post(
             f"{AI_SERVICE_BASE_URL}{path}",
             files=files,
-            timeout=AI_TIMEOUT_SECONDS,
+            timeout=AI_MEDIA_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         data = response.json()

@@ -26,6 +26,7 @@ import logging
 from typing import Optional
 
 from dotenv import load_dotenv
+from utils.safe_extract import first_or_none
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -149,7 +150,8 @@ def _classify_groq(user_message: str, api_key: str) -> dict:
             response_format={"type": "json_object"},  # Force JSON output
         )
 
-        raw = response.choices[0].message.content
+        first_choice = first_or_none(response.choices) if hasattr(response, "choices") else None
+        raw = getattr(getattr(first_choice, "message", None), "content", "{}")
         return _parse_llm_response(raw, "llm_groq")
 
     except ImportError:
@@ -280,13 +282,19 @@ def _rule_based_fallback(text: str, entities: dict) -> dict:
     if entities.get("has_urgency"):
         score += 25
         flags = entities.get("urgency_flags", [])
-        reasons.append(f"Urgency language: '{flags[0]}'" if flags else "Urgency language detected")
+        first_flag = first_or_none(flags)
+        reasons.append(f"Urgency language: '{first_flag}'" if first_flag else "Urgency language detected")
 
     gulf = [l for l in entities.get("locations", [])
             if l in {"dubai", "uae", "qatar", "saudi", "saudi arabia", "kuwait", "bahrain", "oman"}]
     if gulf and not entities.get("company_names"):
         score += 15
-        reasons.append(f"Overseas job ({gulf[0]}) with no verifiable company")
+        first_gulf = first_or_none(gulf)
+        reasons.append(
+            f"Overseas job ({first_gulf}) with no verifiable company"
+            if first_gulf
+            else "Overseas job with no verifiable company"
+        )
 
     score = min(score, 100)
 
