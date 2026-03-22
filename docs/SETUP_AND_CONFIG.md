@@ -29,7 +29,7 @@ Run (example):
 - `uvicorn app.main:app --reload --port 8000`
 
 Backend configuration:
-- `AI_SERVICE_BASE_URL` (default `http://127.0.0.1:8001`)
+- `AI_SERVICE_URL` (default `http://localhost:8001`)
 - `AI_MEDIA_TIMEOUT` (default `30`)
 
 LLM configuration (only used for “medium” ambiguity in backend fallback pipeline):
@@ -57,9 +57,11 @@ Key env vars:
 - `TWILIO_PHONE_NUMBER` (sender for SMS)
 - `BACKEND_API_BASE_URL` (default `http://127.0.0.1:8000`)
 
-Twilio will send webhooks to:
+Twilio should send webhooks to the WhatsApp bot service URL (not backend):
 - `POST /whatsapp`
 - `POST /sms`
+
+If Twilio points to backend (`:8000/whatsapp`), you will get `404 Not Found` because these routes live in `whatsapp-bot/bot.py`.
 
 The webhook handler validates the `X-Twilio-Signature` header against your Auth Token.
 
@@ -74,4 +76,3 @@ To use against a non-local backend you’ll need to update:
 - `browser-extension/content.js`
 - `browser-extension/popup.js`
 - `browser-extension/manifest.json` host permissions
-

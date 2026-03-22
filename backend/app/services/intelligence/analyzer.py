@@ -14,6 +14,7 @@ SIGNAL_REASON_MAP: dict[str, str] = {
     "salary_anomaly": "salary anomaly",
     "unknown_company": "company not identified",
     "known_scam_number": "known_scam_number",
+    "syndicate_member": "entity linked to potential scam syndicate",
 }
 
 
@@ -54,14 +55,14 @@ def _merge_with_llm(
     return base_result
 
 
-def analyze_text(text: str) -> dict[str, Any]:
+def analyze_text(text: str, enable_llm: bool = True) -> dict[str, Any]:
     """Run the full scam intelligence pipeline for a job message.
 
     Pipeline:
     1. Extract entities
     2. Detect rule-based scam signals
     3. Compute weighted risk score and level
-    4. Run LLM deep analysis only for medium-risk cases
+    4. Run optional LLM deep analysis only for medium-risk cases
     5. Merge and return consolidated result
     """
     try:
@@ -83,7 +84,9 @@ def analyze_text(text: str) -> dict[str, Any]:
             except Exception:  # pragma: no cover
                 reputation_data = None
 
-        risk_result = calculate_risk(signals)
+        risk_result = calculate_risk(signals, entities=entities)
+        if risk_result.get("syndicate_match") and "syndicate_member" not in signals:
+            signals.append("syndicate_member")
 
         result: dict[str, Any] = {
             "risk_score": risk_result["risk_score"],
@@ -100,7 +103,7 @@ def analyze_text(text: str) -> dict[str, Any]:
             result["phone_reputation"] = reputation_data
 
         score = float(result["risk_score"])
-        if 0.3 <= score <= 0.6:
+        if enable_llm and 0.3 <= score <= 0.6:
             try:
                 llm_result = classify_with_llm(text)
                 result = _merge_with_llm(result, llm_result, signals)

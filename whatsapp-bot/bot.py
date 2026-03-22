@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 import mimetypes
 import re
+import sys
+from pathlib import Path
 from typing import Any
 
 import requests
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request, Response
+from fastapi import FastAPI, Form, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client
 
@@ -52,6 +55,12 @@ _REASON_TRANSLATIONS_HI = {
     "analysis failed": "विश्लेषण नहीं हो पाया",
     "empty input": "इनपुट खाली था",
 }
+
+_BACKEND_PATH = Path(__file__).resolve().parents[1] / "backend"
+if str(_BACKEND_PATH) not in sys.path:
+    sys.path.append(str(_BACKEND_PATH))
+
+from app.services.queue.task_queue import enqueue_job
 
 
 def _score_percent(result: dict[str, Any]) -> int:
@@ -153,7 +162,7 @@ def _build_localized_response(result: dict[str, Any], language: str) -> str:
             advice = "फिलहाल जोखिम कम लगता है, फिर भी सत्यापन करके ही निर्णय लें।"
         reasons_text = "\n".join(f"* {item}" for item in localized_reasons) if localized_reasons else "* कोई स्पष्ट रेड फ्लैग नहीं मिला"
         return (
-            "*NaukariSaathi - जॉब सेफ़्टी चेक*\n"
+            "*ScamShield - जॉब सेफ़्टी चेक*\n"
             "-------------------------------\n"
             f"वर्डिक्ट: {verdict}\n"
             f"रिस्क स्कोर: {score}%\n\n"
@@ -174,7 +183,7 @@ def _build_localized_response(result: dict[str, Any], language: str) -> str:
         advice = "Risk appears low, but still verify details before you act."
     reasons_text = "\n".join(f"* {item}" for item in localized_reasons) if localized_reasons else "* No clear red flags found"
     return (
-        "*NaukariSaathi - Job Safety Check*\n"
+        "*ScamShield - Job Safety Check*\n"
         "-------------------------------\n"
         f"Verdict: {verdict}\n"
         f"Risk Score: {score}%\n\n"
@@ -276,7 +285,6 @@ def _process_and_send_result(
 @app.post("/whatsapp")
 async def whatsapp_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
     Body: str = Form(default=""),
     From: str = Form(default=""),
     NumMedia: str = Form(default="0"),
@@ -311,13 +319,13 @@ async def whatsapp_webhook(
         preferred = _normalize_language(USER_LANGUAGE_PREFS.get(From)) or "en"
         if preferred == "hi":
             reply = (
-                "*NaukariSaathi में स्वागत है*\n\n"
+                "*ScamShield में स्वागत है*\n\n"
                 "कृपया संदिग्ध जॉब मैसेज, फोटो, वॉइस नोट, या दस्तावेज़ भेजें।\n"
                 "हम जांचकर बताएंगे कि यह सुरक्षित है या नहीं।"
             )
         else:
             reply = (
-                "*Welcome to NaukariSaathi*\n\n"
+                "*Welcome to ScamShield*\n\n"
                 "Please send a suspicious job message, photo, voice note, or document.\n"
                 "We will check and tell you if it is safe."
             )
@@ -340,16 +348,17 @@ async def whatsapp_webhook(
         body=waiting_text,
     )
 
-    background_tasks.add_task(
-        _process_and_send_result,
-        From,
-        Body,
-        media_count,
-        MediaUrl0,
-        MediaContentType0,
+    enqueue_job(
+        {
+            "from_number": From,
+            "body_text": Body,
+            "media_count": media_count,
+            "media_url": MediaUrl0,
+            "media_content_type": MediaContentType0,
+        }
     )
 
-    return Response(content="", media_type="text/xml")
+    return JSONResponse(content={"status": "queued"})
 
 
 @app.post("/sms")
@@ -366,11 +375,11 @@ async def sms_webhook(
 
     score = _score_percent(result)
     if score >= 65:
-        reply = f"High scam risk ({score}%). Payment mat bhejiye. NaukariSaathi"
+        reply = f"High scam risk ({score}%). Payment mat bhejiye. ScamShield"
     elif score >= 35:
-        reply = f"Suspicious message ({score}%). Verify before payment. NaukariSaathi"
+        reply = f"Suspicious message ({score}%). Verify before payment. ScamShield"
     else:
-        reply = f"Low risk ({score}%), but always verify. NaukariSaathi"
+        reply = f"Low risk ({score}%), but always verify. ScamShield"
 
     client.messages.create(
         from_=os.getenv("TWILIO_PHONE_NUMBER", FROM_NUMBER),
@@ -382,4 +391,4 @@ async def sms_webhook(
 
 @app.get("/")
 def root():
-    return {"status": "NaukariSaathi messaging server is running"}
+    return {"status": "ScamShield messaging server is running"}

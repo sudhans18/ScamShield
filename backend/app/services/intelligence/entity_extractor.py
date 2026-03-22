@@ -14,9 +14,15 @@ _STOP_TOKENS = (
     "call",
     "contact",
     "phone",
+    "mobile",
+    "whatsapp",
     "agent",
     "broker",
     "company",
+    "urgent",
+    "immediate",
+    "joining",
+    "interview",
 )
 
 _COMMON_LOCATIONS = {
@@ -32,18 +38,37 @@ _COMMON_LOCATIONS = {
     "riyadh",
     "jeddah",
     "delhi",
+    "new delhi",
     "mumbai",
+    "navi mumbai",
     "pune",
     "hyderabad",
     "bengaluru",
     "bangalore",
     "chennai",
     "kolkata",
+    "kochi",
     "kerala",
     "goa",
+    "lucknow",
+    "jaipur",
+    "ahmedabad",
+    "surat",
+    "noida",
+    "gurgaon",
+    "gurugram",
+    "faridabad",
+    "patna",
+    "bhopal",
+    "indore",
+    "nagpur",
+    "kanpur",
+    "vijayawada",
+    "vizag",
+    "visakhapatnam",
 }
 
-_PHONE_RE = re.compile(r"(?<!\d)(?:\+91[-\s]?)?([6-9]\d{9})(?!\d)")
+_PHONE_CANDIDATE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s\-()]{8,}\d)")
 _NUMBER_RE = re.compile(r"\b\d{1,3}(?:,\d{2,3})*(?:\.\d+)?\b")
 
 
@@ -53,16 +78,46 @@ def _to_int(number_text: str) -> int:
     return int(float(cleaned))
 
 
+def _normalize_phone_candidate(candidate: str) -> str | None:
+    digits = re.sub(r"\D", "", candidate or "")
+    if not digits or len(digits) < 10 or len(digits) > 15:
+        return None
+
+    # India normalization for common variants.
+    if len(digits) == 12 and digits.startswith("91") and digits[2] in "6789":
+        return digits[-10:]
+    if len(digits) == 11 and digits.startswith("0") and digits[1] in "6789":
+        return digits[-10:]
+    if len(digits) == 10 and digits[0] in "6789":
+        return digits
+
+    # Keep non-Indian numbers in E.164-ish style.
+    return f"+{digits}"
+
+
 def _extract_phones(text: str) -> list[str]:
-    """Extract Indian phone numbers and normalize to 10 digits."""
-    phones = _PHONE_RE.findall(text)
+    """Extract phone numbers from noisy text (supports separators and country codes)."""
     # Preserve order while removing duplicates.
     seen: set[str] = set()
     result: list[str] = []
-    for phone in phones:
-        if phone not in seen:
-            seen.add(phone)
-            result.append(phone)
+
+    for match in _PHONE_CANDIDATE_RE.finditer(text):
+        candidate = (match.group(0) or "").strip()
+        if not candidate:
+            continue
+
+        # Avoid misclassifying amounts like 12,000 or 75,000.
+        if "," in candidate and "+" not in candidate:
+            continue
+
+        normalized = _normalize_phone_candidate(candidate)
+        if not normalized:
+            continue
+
+        if normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+
     return result
 
 
@@ -91,30 +146,50 @@ def _extract_amount_after_keywords(text: str, keywords: tuple[str, ...]) -> int 
 
 
 def _clean_phrase(value: str) -> str:
-    value = re.sub(r"\s+", " ", value).strip(" -,:.")
+    value = re.sub(r"\s+", " ", value).strip(" -,:.;")
     return value
 
 
+def _truncate_on_stop_tokens(value: str) -> str:
+    pattern = r"\b(?:" + "|".join(re.escape(token) for token in _STOP_TOKENS) + r")\b"
+    return re.split(pattern, value, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+
+
 def _extract_agent(text: str) -> str | None:
-    match = re.search(r"\b(?:agent|broker|contact)\s+([A-Za-z][A-Za-z.'-]*)", text, re.IGNORECASE)
+    match = re.search(r"\b(?:agent|broker|contact(?:\s+person)?)\s*[:=-]?\s*([A-Za-z][A-Za-z.'-]*)", text, re.IGNORECASE)
     if not match:
         return None
     return _clean_phrase(match.group(1)).title()
 
 
 def _extract_location(text: str) -> str | None:
-    # Explicit patterns first.
-    explicit = re.search(
-        r"\b(?:in|at|location)\s+([A-Za-z][A-Za-z\s]{1,40}?)(?=\b(?:"
-        + "|".join(_STOP_TOKENS)
-        + r")\b|$)",
-        text,
-        re.IGNORECASE,
-    )
-    if explicit:
-        return _clean_phrase(explicit.group(1)).title()
+    patterns = [
+        r"\b(?:location|loc|place)\s*[:=-]?\s*([A-Za-z][A-Za-z\s,.-]{2,60})",
+        r"\b(?:based\s+in|posted\s+in|work\s+location)\s*[:=-]?\s*([A-Za-z][A-Za-z\s,.-]{2,60})",
+        r"\b(?:in|at|from|to)\s+([A-Za-z][A-Za-z\s,.-]{2,50})",
+    ]
 
-    # Fallback to a known-location lookup inside the sentence.
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+
+        location = _clean_phrase(match.group(1))
+        location = _truncate_on_stop_tokens(location)
+        location = _clean_phrase(location)
+        if not location:
+            continue
+
+        if any(char.isdigit() for char in location):
+            continue
+
+        # Avoid huge captures in long WhatsApp forwards.
+        if len(location.split()) > 5:
+            location = " ".join(location.split()[:5])
+
+        return location.title()
+
+    # Fallback to known-location lookup inside the sentence.
     lowered = text.lower()
     for loc in sorted(_COMMON_LOCATIONS, key=len, reverse=True):
         if re.search(rf"\b{re.escape(loc)}\b", lowered):
@@ -126,7 +201,7 @@ def _extract_location(text: str) -> str | None:
 def _extract_role(text: str, location: str | None) -> str | None:
     # Pattern-based role extraction when role is explicitly tagged.
     tagged = re.search(
-        r"\b(?:role|position|job|vacancy|opening)\s*(?::|as|for)?\s+([A-Za-z][A-Za-z\s]{1,50}?)(?=\b(?:"
+        r"\b(?:role|position|job|vacancy|opening|designation)\s*(?::|as|for)?\s+([A-Za-z][A-Za-z\s]{1,50}?)(?=\b(?:"
         + "|".join(_STOP_TOKENS)
         + r")\b|$)",
         text,
@@ -141,7 +216,7 @@ def _extract_role(text: str, location: str | None) -> str | None:
         start = re.split(rf"\b{re.escape(location)}\b", start, flags=re.IGNORECASE, maxsplit=1)[0]
 
     start = re.split(
-        r"\b(?:salary|fee|registration|call|contact|agent|broker|phone|company)\b",
+        r"\b(?:salary|fee|registration|call|contact|agent|broker|phone|company|location)\b",
         start,
         flags=re.IGNORECASE,
         maxsplit=1,
@@ -160,16 +235,24 @@ def _extract_role(text: str, location: str | None) -> str | None:
 
 
 def _extract_company(text: str) -> str | None:
-    match = re.search(
-        r"\b(?:company|at)\s+([A-Za-z][A-Za-z0-9&.,'\-\s]{1,60}?)(?=\b(?:"
+    patterns = [
+        r"\b(?:company|organization|firm)\s*[:=-]?\s*([A-Za-z][A-Za-z0-9&.,'\-\s]{1,60}?)(?=\b(?:"
         + "|".join(_STOP_TOKENS)
         + r")\b|$)",
-        text,
-        re.IGNORECASE,
-    )
-    if not match:
-        return None
-    return _clean_phrase(match.group(1)).title()
+        r"\b(?:at|from)\s+([A-Za-z][A-Za-z0-9&.,'\-\s]{1,60}?)(?=\b(?:"
+        + "|".join(_STOP_TOKENS)
+        + r")\b|$)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        company = _clean_phrase(match.group(1)).title()
+        if company:
+            return company
+
+    return None
 
 
 def extract_entities(text: str) -> dict[str, Any]:

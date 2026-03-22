@@ -29,14 +29,17 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from dotenv import load_dotenv
 from utils.safe_extract import first_or_none
 
 logger = logging.getLogger(__name__)
+load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY") or os.getenv("SUPABASE_ANON_KEY", "")
 API_TIMEOUT  = 5   # seconds
+_MISSING_SUPABASE_WARNED = False
 
 # Trust weights per reporter type
 TRUST_WEIGHTS = {
@@ -133,6 +136,7 @@ def validate_entities(entities: dict) -> dict:
 
 def _check_phone(phone: str) -> dict:
     """Check phone against Supabase scam DB."""
+    global _MISSING_SUPABASE_WARNED
     result = {
         "phone":           phone,
         "phone_hash":      _hash(phone),
@@ -145,7 +149,9 @@ def _check_phone(phone: str) -> dict:
 
     if not (SUPABASE_URL and SUPABASE_KEY):
         result["db_status"] = "unavailable"
-        logger.warning("validator: SUPABASE credentials not configured")
+        if not _MISSING_SUPABASE_WARNED:
+            logger.warning("validator: SUPABASE credentials not configured")
+            _MISSING_SUPABASE_WARNED = True
         return result
 
     db = _supabase_phone_lookup(_hash(phone))

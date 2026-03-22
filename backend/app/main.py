@@ -5,8 +5,10 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from app.routes.scam_routes import router as scam_router
 from app.routes.analyze import router as analyze_router
+from app.routes.webhook_routes import router as webhook_router
 from app.core.rate_limiter import limiter
 from app.services.intelligence.ai_bridge import is_ai_service_available
+from app.services.cache.redis_client import redis_health
 
 app = FastAPI(
     title="NaukariSaathi API",
@@ -27,6 +29,7 @@ app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(analyze_router)
 app.include_router(scam_router)
+app.include_router(webhook_router)
 
 @app.get("/")
 def root():
@@ -40,6 +43,11 @@ def health():
 
 
 @app.get("/ai-health")
-def ai_health():
+async def ai_health():
     """AI-service connectivity health endpoint."""
-    return {"ai_service": "online" if is_ai_service_available() else "offline"}
+    return {"ai_service": "online" if await is_ai_service_available() else "offline"}
+
+
+@app.get("/health/redis")
+def redis_health_check():
+    return {"redis": "ok" if redis_health() else "down"}

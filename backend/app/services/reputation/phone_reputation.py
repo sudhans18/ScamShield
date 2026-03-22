@@ -5,6 +5,7 @@ from typing import Any
 
 from anyio import to_thread
 
+from app.services.cache.redis_client import get_cache, set_cache
 from app.services.supabase_client import supabase
 
 
@@ -40,8 +41,20 @@ def _fetch_reports(phone: str) -> list[dict[str, Any]]:
 
 def check_phone_reputation(phone: str) -> dict[str, Any]:
     """Synchronous reputation lookup (matches existing sync pipeline)."""
+    cache_key = f"phone_reputation:{phone}"
+    cached = get_cache(cache_key)
+    if cached:
+        trust_score = float(cached)
+        return {
+            "phone": phone,
+            "report_count": 0,
+            "trust_score": trust_score,
+            "reputation": _resolve_reputation(trust_score),
+        }
     reports = _fetch_reports(phone)
-    return _calculate_from_reports(phone=phone, reports=reports)
+    reputation = _calculate_from_reports(phone=phone, reports=reports)
+    set_cache(cache_key, reputation["trust_score"], ttl=3600)
+    return reputation
 
 
 def upsert_phone_reputation(phone: str) -> dict[str, Any]:
@@ -58,5 +71,17 @@ def upsert_phone_reputation(phone: str) -> dict[str, Any]:
 
 async def check_phone_reputation_async(phone: str) -> dict[str, Any]:
     """Async-friendly wrapper around the sync Supabase client."""
+    cache_key = f"phone_reputation:{phone}"
+    cached = get_cache(cache_key)
+    if cached:
+        trust_score = float(cached)
+        return {
+            "phone": phone,
+            "report_count": 0,
+            "trust_score": trust_score,
+            "reputation": _resolve_reputation(trust_score),
+        }
     reports = await to_thread.run_sync(_fetch_reports, phone)
-    return _calculate_from_reports(phone=phone, reports=reports)
+    reputation = _calculate_from_reports(phone=phone, reports=reports)
+    set_cache(cache_key, reputation["trust_score"], ttl=3600)
+    return reputation

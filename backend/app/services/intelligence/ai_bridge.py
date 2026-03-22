@@ -4,11 +4,15 @@ from typing import Any
 import os
 import re
 
-import requests
+import httpx
 
 from app.services.intelligence.analyzer import analyze_text as local_analyze_text
+from app.services.intelligence.entity_extractor import extract_entities
+from app.services.graph.graph_service import store_message_graph
+from app.services.graph.syndicate_detector import detect_and_store_syndicates
+from app.core.config import settings
 
-AI_SERVICE_BASE_URL = os.getenv("AI_SERVICE_BASE_URL", "http://127.0.0.1:8001").rstrip("/")
+AI_SERVICE_BASE_URL = (settings.AI_SERVICE_URL or "http://127.0.0.1:8001").rstrip("/")
 AI_TIMEOUT_SECONDS = 5.0
 AI_MEDIA_TIMEOUT_SECONDS = float(os.getenv("AI_MEDIA_TIMEOUT", "30"))
 _DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
@@ -68,7 +72,10 @@ def _normalize_entities(raw_entities: dict[str, Any]) -> dict[str, Any]:
     upi = _as_list(raw_entities.get("upi") or raw_entities.get("upi_id") or raw_entities.get("upi_ids"))
 
     company = raw_entities.get("company") or raw_entities.get("company_name") or ""
-    location = raw_entities.get("location") or ""
+    location = raw_entities.get("location") or raw_entities.get("city") or ""
+    if not location:
+        locations = _as_list(raw_entities.get("locations"))
+        location = locations[0] if locations else ""
 
     return {
         "phone": [str(value).strip() for value in phone if str(value).strip()],
@@ -78,6 +85,42 @@ def _normalize_entities(raw_entities: dict[str, Any]) -> dict[str, Any]:
         "location": str(location).strip(),
         "upi": [str(value).strip() for value in upi if str(value).strip()],
     }
+
+
+def _merge_with_rule_entities(text: str, entities: dict[str, Any]) -> dict[str, Any]:
+    """Backfill weak/missing AI entities using deterministic extraction."""
+    try:
+        rules = extract_entities(text)
+    except Exception:
+        return entities
+
+    merged = dict(entities)
+
+    ai_phones = merged.get("phone")
+    if not isinstance(ai_phones, list) or not ai_phones:
+        merged["phone"] = [str(item).strip() for item in rules.get("phones", []) if str(item).strip()]
+
+    if not str(merged.get("location") or "").strip():
+        merged["location"] = str(rules.get("location") or "").strip()
+
+    if not str(merged.get("company") or "").strip():
+        merged["company"] = str(rules.get("company") or "").strip()
+
+    salary_values = merged.get("salary")
+    if not isinstance(salary_values, list) or not salary_values:
+        salary = rules.get("salary")
+        merged["salary"] = [salary] if salary is not None else []
+
+    fee_values = merged.get("fee")
+    if not isinstance(fee_values, list) or not fee_values:
+        fee = rules.get("fee")
+        merged["fee"] = [fee] if fee is not None else []
+
+    role = str(rules.get("role") or "").strip()
+    if role and not str(merged.get("role") or "").strip():
+        merged["role"] = role
+
+    return merged
 
 
 def _normalize_analysis_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -144,40 +187,40 @@ def _detect_language(text: str) -> str:
     return "en"
 
 
-def call_ai_service(path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+async def call_ai_service(path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     """Call AI service JSON endpoint and return None on any network/runtime failure."""
     try:
-        response = requests.post(
-            f"{AI_SERVICE_BASE_URL}{path}",
-            json=payload,
-            timeout=AI_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            return None
-        return data
-    except (requests.RequestException, ValueError):
+        async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                f"{AI_SERVICE_BASE_URL}{path}",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                return None
+            return data
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError):
         return None
 
 
-def _call_ai_service_file(
+async def _call_ai_service_file(
     path: str, filename: str, content: bytes, content_type: str | None
 ) -> dict[str, Any] | None:
     try:
         ctype = content_type or "application/octet-stream"
         files = {"file": (filename, content, ctype)}
-        response = requests.post(
-            f"{AI_SERVICE_BASE_URL}{path}",
-            files=files,
-            timeout=AI_MEDIA_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict):
-            return None
-        return data
-    except (requests.RequestException, ValueError):
+        async with httpx.AsyncClient(timeout=AI_MEDIA_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                f"{AI_SERVICE_BASE_URL}{path}",
+                files=files,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                return None
+            return data
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError):
         return None
 
 
@@ -195,19 +238,31 @@ def _extract_text_from_ai_payload(payload: dict[str, Any]) -> str:
     return ""
 
 
-def analyze_text_with_ai(text: str, source_channel: str = "dashboard") -> dict[str, Any]:
-    payload = call_ai_service(
+async def analyze_text_with_ai(text: str, source_channel: str = "dashboard") -> dict[str, Any]:
+    payload = await call_ai_service(
         "/analyse/text",
         {"text": text, "source_channel": source_channel},
     )
     if payload is not None:
         result = _normalize_analysis_payload(payload)
+        result["entities"] = _merge_with_rule_entities(text, result.get("entities", {}))
+        try:
+            result["graph"] = store_message_graph(result.get("entities", {}))
+            detect_and_store_syndicates()
+        except Exception:
+            result["graph"] = {"nodes": [], "edges": []}
         result["source"] = "ai-services"
         return result
 
-    fallback = local_analyze_text(text)
+    fallback = local_analyze_text(text, enable_llm=True)
     if isinstance(fallback, dict):
         result = _normalize_analysis_payload(fallback)
+        result["entities"] = _merge_with_rule_entities(text, result.get("entities", {}))
+        try:
+            result["graph"] = store_message_graph(result.get("entities", {}))
+            detect_and_store_syndicates()
+        except Exception:
+            result["graph"] = {"nodes": [], "edges": []}
         result["source"] = "backend-rules"
         return result
     return {
@@ -215,22 +270,23 @@ def analyze_text_with_ai(text: str, source_channel: str = "dashboard") -> dict[s
         "risk_level": "LOW",
         "reasons": ["Analysis failed"],
         "entities": _normalize_entities({}),
+        "graph": {"nodes": [], "edges": []},
         "source": "backend-rules",
     }
 
 
-def analyze_image_with_ai(
+async def analyze_image_with_ai(
     filename: str,
     content: bytes,
     content_type: str | None = None,
     source_channel: str = "dashboard",
 ) -> dict[str, Any]:
-    payload = _call_ai_service_file("/analyse/image", filename, content, content_type)
+    payload = await _call_ai_service_file("/analyse/image", filename, content, content_type)
     if payload is None:
         raise RuntimeError("AI service unavailable for image OCR.")
     extracted_text = _extract_text_from_ai_payload(payload)
     if extracted_text:
-        result = analyze_text_with_ai(extracted_text, source_channel=source_channel)
+        result = await analyze_text_with_ai(extracted_text, source_channel=source_channel)
         result["extracted_text"] = extracted_text
         result["detected_input_language"] = _detect_language(extracted_text)
         return result
@@ -239,18 +295,18 @@ def analyze_image_with_ai(
     return result
 
 
-def analyze_audio_with_ai(
+async def analyze_audio_with_ai(
     filename: str,
     content: bytes,
     content_type: str | None = None,
     source_channel: str = "dashboard",
 ) -> dict[str, Any]:
-    payload = _call_ai_service_file("/analyse/audio", filename, content, content_type)
+    payload = await _call_ai_service_file("/analyse/audio", filename, content, content_type)
     if payload is None:
         raise RuntimeError("AI service unavailable for audio transcription.")
     extracted_text = _extract_text_from_ai_payload(payload)
     if extracted_text:
-        result = analyze_text_with_ai(extracted_text, source_channel=source_channel)
+        result = await analyze_text_with_ai(extracted_text, source_channel=source_channel)
         result["extracted_text"] = extracted_text
         result["detected_input_language"] = _detect_language(extracted_text)
         language_name = payload.get("language_name")
@@ -262,18 +318,18 @@ def analyze_audio_with_ai(
     return result
 
 
-def analyze_document_with_ai(
+async def analyze_document_with_ai(
     filename: str,
     content: bytes,
     content_type: str | None = None,
     source_channel: str = "dashboard",
 ) -> dict[str, Any]:
-    payload = _call_ai_service_file("/analyse/document", filename, content, content_type)
+    payload = await _call_ai_service_file("/analyse/document", filename, content, content_type)
     if payload is None:
         raise RuntimeError("AI service unavailable for document OCR.")
     extracted_text = _extract_text_from_ai_payload(payload)
     if extracted_text:
-        result = analyze_text_with_ai(extracted_text, source_channel=source_channel)
+        result = await analyze_text_with_ai(extracted_text, source_channel=source_channel)
         result["extracted_text"] = extracted_text
         result["detected_input_language"] = _detect_language(extracted_text)
         return result
@@ -282,12 +338,10 @@ def analyze_document_with_ai(
     return result
 
 
-def is_ai_service_available() -> bool:
+async def is_ai_service_available() -> bool:
     try:
-        response = requests.get(
-            f"{AI_SERVICE_BASE_URL}/health",
-            timeout=AI_TIMEOUT_SECONDS,
-        )
-        return response.ok
-    except requests.RequestException:
+        async with httpx.AsyncClient(timeout=AI_TIMEOUT_SECONDS) as client:
+            response = await client.get(f"{AI_SERVICE_BASE_URL}/health")
+            return response.status_code < 400
+    except httpx.RequestError:
         return False

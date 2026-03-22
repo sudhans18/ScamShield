@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class AnalyzeRequest(BaseModel):
     text: Optional[str] = None
     source: Optional[str] = "unknown"
+    phone_number: Optional[str] = None
 
 
 class ScamReportCreate(BaseModel):

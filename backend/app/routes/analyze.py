@@ -1,9 +1,13 @@
+import hashlib
 import json
 import logging
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from app.models.schemas import AnalyzeRequest
 from app.core.rate_limiter import limiter
+from app.middleware.rate_limit import check_rate_limit
+from app.services.cache.redis_client import get_cache, set_cache
 from app.services.intelligence.ai_bridge import (
     analyze_audio_with_ai,
     analyze_document_with_ai,
@@ -59,20 +63,44 @@ async def analyze(payload: AnalyzeRequest, request: Request):
     if not text:
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
+    phone_number = (payload.phone_number or "").strip() or (request.client.host if request.client else "unknown")
+    allowed = check_rate_limit(phone_number)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Too many requests. Try again later."}
+        )
+
     source = _normalize_source(payload.source)
-    result = analyze_text_with_ai(text, source_channel=source)
+
+    message_hash = hashlib.sha256(text.encode()).hexdigest()
+    cache_key = f"analysis:{message_hash}"
+    cached = get_cache(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    result = await analyze_text_with_ai(text, source_channel=source)
     _store_if_high_risk(result, source)
     _log_analysis_event(result, source)
+
+    set_cache(cache_key, json.dumps(result), ttl=86400)
     return result
 
 
 @router.post("/analyze/image")
-async def analyze_image(file: UploadFile = File(...)):
+async def analyze_image(request: Request, file: UploadFile = File(...)):
+    phone_number = request.client.host if request.client else "unknown"
+    allowed = check_rate_limit(phone_number)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Too many requests. Try again later."}
+        )
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file upload.")
     try:
-        result = analyze_image_with_ai(
+        result = await analyze_image_with_ai(
             file.filename or "image.jpg",
             content,
             file.content_type,
@@ -86,12 +114,19 @@ async def analyze_image(file: UploadFile = File(...)):
 
 
 @router.post("/analyze/audio")
-async def analyze_audio(file: UploadFile = File(...)):
+async def analyze_audio(request: Request, file: UploadFile = File(...)):
+    phone_number = request.client.host if request.client else "unknown"
+    allowed = check_rate_limit(phone_number)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Too many requests. Try again later."}
+        )
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file upload.")
     try:
-        result = analyze_audio_with_ai(
+        result = await analyze_audio_with_ai(
             file.filename or "audio.ogg",
             content,
             file.content_type,
@@ -105,12 +140,19 @@ async def analyze_audio(file: UploadFile = File(...)):
 
 
 @router.post("/analyze/document")
-async def analyze_document(file: UploadFile = File(...)):
+async def analyze_document(request: Request, file: UploadFile = File(...)):
+    phone_number = request.client.host if request.client else "unknown"
+    allowed = check_rate_limit(phone_number)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Too many requests. Try again later."}
+        )
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file upload.")
     try:
-        result = analyze_document_with_ai(
+        result = await analyze_document_with_ai(
             file.filename or "document.pdf",
             content,
             file.content_type,

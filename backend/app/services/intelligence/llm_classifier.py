@@ -7,6 +7,7 @@ from typing import Any
 
 import requests
 
+from app.core.config import settings
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 DEFAULT_MODEL = "llama3-70b-8192"
 
@@ -79,7 +80,7 @@ def _normalize_output(parsed: dict[str, Any]) -> dict[str, Any]:
 
 def classify_with_llm(text: str) -> dict[str, Any]:
     """Classify job message scam risk with Groq LLaMA 3 and return parsed JSON."""
-    api_key = os.getenv("GROQ_API_KEY")
+    api_key = settings.GROQ_API_KEY
     if not api_key:
         raise ValueError("GROQ_API_KEY environment variable is not set.")
 

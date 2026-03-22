@@ -1,6 +1,5 @@
 from supabase import create_client
 
-SUPABASE_URL = "https://emejdmjltktynyxbyezy.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVtZWpkbWpsdGt0eW55eGJ5ZXp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0NjIzNjksImV4cCI6MjA4OTAzODM2OX0.AZJOuW-RCc441ZUy2DY51LHLNlgDoblXsOk9TZRhpvw"
+from app.core.config import settings
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)

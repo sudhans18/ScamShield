@@ -98,10 +98,13 @@ def store_analysis_report(result: dict[str, Any], source: str | None) -> dict[st
 
     phones = entities.get("phone")
     if not isinstance(phones, list):
+        phones = entities.get("phones")
+    if not isinstance(phones, list):
         phones = []
     scam_phone = str(phones[0]).strip() if phones else None
     company_name = str(entities.get("company") or "").strip() or None
     location = str(entities.get("location") or "").strip() or None
+    job_role = str(entities.get("role") or "").strip() or None
 
     salary_values = entities.get("salary")
     fee_values = entities.get("fee")
@@ -112,6 +115,8 @@ def store_analysis_report(result: dict[str, Any], source: str | None) -> dict[st
     payload = {
         "scam_phone": scam_phone,
         "company_name": company_name,
+        "job_role": job_role,
+        "location": location,
         "salary": salary,
         "fee": fee,
         "risk_score": risk_score,
