@@ -9,15 +9,24 @@ redis_client = redis.from_url(
 
 
 def get_cache(key: str):
-    return redis_client.get(key)
+    try:
+        return redis_client.get(key)
+    except Exception:
+        return None
 
 
 def set_cache(key: str, value: str, ttl: int = 3600):
-    redis_client.setex(key, ttl, value)
+    try:
+        redis_client.setex(key, ttl, value)
+    except Exception:
+        return None
 
 
 def delete_cache(key: str):
-    redis_client.delete(key)
+    try:
+        redis_client.delete(key)
+    except Exception:
+        return None
 
 
 def redis_health():

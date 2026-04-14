@@ -18,6 +18,7 @@ from app.services.scam_report_store import store_analysis_report, store_report_e
 
 router = APIRouter(prefix="/api", tags=["analysis"])
 logger = logging.getLogger(__name__)
+CACHE_VERSION = "intelligence-v2"
 
 SOURCE_MAP = {
     "browser_extension": "extension",
@@ -56,6 +57,15 @@ def _log_analysis_event(result: dict, source: str) -> None:
     )
 
 
+def _should_cache_result(result: dict) -> bool:
+    summary = str(result.get("english_summary") or "").lower()
+    reasons = result.get("reasons")
+    reason_text = " ".join(str(item).lower() for item in reasons) if isinstance(reasons, list) else ""
+    if "ai investigator unavailable" in summary or "ai investigator unavailable" in reason_text:
+        return False
+    return True
+
+
 @router.post("/analyze")
 @limiter.limit("10/minute")
 async def analyze(payload: AnalyzeRequest, request: Request):
@@ -74,7 +84,7 @@ async def analyze(payload: AnalyzeRequest, request: Request):
     source = _normalize_source(payload.source)
 
     message_hash = hashlib.sha256(text.encode()).hexdigest()
-    cache_key = f"analysis:{message_hash}"
+    cache_key = f"analysis:{CACHE_VERSION}:{source}:{message_hash}"
     cached = get_cache(cache_key)
     if cached:
         return json.loads(cached)
@@ -83,7 +93,8 @@ async def analyze(payload: AnalyzeRequest, request: Request):
     _store_if_high_risk(result, source)
     _log_analysis_event(result, source)
 
-    set_cache(cache_key, json.dumps(result), ttl=86400)
+    if _should_cache_result(result):
+        set_cache(cache_key, json.dumps(result), ttl=86400)
     return result
 
 

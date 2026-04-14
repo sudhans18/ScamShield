@@ -69,6 +69,11 @@ def _send_whatsapp_message(to_number: str, body: str) -> None:
     )
 
 
+def _parse_bool(value: str | None) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "y"}
+
+
 @router.post("/whatsapp")
 async def whatsapp_webhook(
     request: Request,
@@ -77,6 +82,7 @@ async def whatsapp_webhook(
     NumMedia: str = Form(default="0"),
     MediaUrl0: str = Form(default=""),
     MediaContentType0: str = Form(default=""),
+    ForwardedManyTimes: str = Form(default=""),
 ):
     if _validator is not None:
         signature = request.headers.get("X-Twilio-Signature", "")
@@ -115,6 +121,7 @@ async def whatsapp_webhook(
             "media_count": media_count,
             "media_url": MediaUrl0,
             "media_content_type": MediaContentType0,
+            "forwarded_many_times": _parse_bool(ForwardedManyTimes),
             "preferred_language": preferred_language,
         }
     )

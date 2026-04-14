@@ -1,8 +1,6 @@
-NaukariSaathi (ScamShield) Docs
+# ScamShield Docs
 
-This repo now has expanded documentation:
-
-- See `docs/API_REFERENCE.md` for all endpoints (backend, AI service, Twilio webhooks).
-- See `docs/PROJECT_STATUS.md` for “completed vs remaining” mapped to the PDF spec.
-- See `docs/SETUP_AND_CONFIG.md` for running the services and required environment variables.
-- See `docs/DATABASE_SCHEMA.md` for the Supabase tables used by the backend.
+- [API_REFERENCE.md](API_REFERENCE.md) — All endpoints (backend REST API, WhatsApp webhook, environment variables)
+- [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) — All Supabase tables (intelligence layer + operational)
+- [SETUP_AND_CONFIG.md](SETUP_AND_CONFIG.md) — Running the services, one-time DB setup, env vars
+- [PROJECT_STATUS.md](PROJECT_STATUS.md) — Component completion status and architecture change log

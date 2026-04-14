@@ -6,11 +6,20 @@ QUEUE_NAME = "message_queue"
 
 
 def enqueue_job(data: dict):
-    redis_client.lpush(QUEUE_NAME, json.dumps(data))
+    try:
+        redis_client.lpush(QUEUE_NAME, json.dumps(data))
+    except Exception:
+        return None
 
 
 def dequeue_job():
-    job = redis_client.brpop(QUEUE_NAME)
+    try:
+        job = redis_client.brpop(QUEUE_NAME)
+    except Exception:
+        return None
     if job:
-        return json.loads(job[1])
+        try:
+            return json.loads(job[1])
+        except Exception:
+            return None
     return None

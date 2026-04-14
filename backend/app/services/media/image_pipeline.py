@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -47,7 +48,8 @@ import numpy as np
 import pytesseract
 from PIL import Image, ExifTags
 # Tell pytesseract where the OCR engine is installed
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+_tess_path = os.getenv("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+pytesseract.pytesseract.tesseract_cmd = _tess_path
 
 logger = logging.getLogger(__name__)
 

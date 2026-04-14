@@ -7,11 +7,12 @@ from app.routes.scam_routes import router as scam_router
 from app.routes.analyze import router as analyze_router
 from app.routes.webhook_routes import router as webhook_router
 from app.core.rate_limiter import limiter
-from app.services.intelligence.ai_bridge import is_ai_service_available
 from app.services.cache.redis_client import redis_health
+import logging
+import asyncio
 
 app = FastAPI(
-    title="NaukariSaathi API",
+    title="ScamShield API",
     description="AI-powered labour fraud detection platform",
     version="0.1"
 )
@@ -31,9 +32,11 @@ app.include_router(analyze_router)
 app.include_router(scam_router)
 app.include_router(webhook_router)
 
+logger = logging.getLogger(__name__)
+
 @app.get("/")
 def root():
-    return {"message": "NaukariSaathi backend running"}
+    return {"message": "ScamShield backend running"}
 
 
 @app.get("/health")
@@ -42,12 +45,18 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/ai-health")
-async def ai_health():
-    """AI-service connectivity health endpoint."""
-    return {"ai_service": "online" if await is_ai_service_available() else "offline"}
-
-
 @app.get("/health/redis")
 def redis_health_check():
     return {"redis": "ok" if redis_health() else "down"}
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    try:
+        from app.services.intelligence.embedding_scorer import _get_model
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _get_model)
+        logger.info("LaBSE model preloaded")
+    except Exception as exc:
+        logger.warning("LaBSE preload failed (non-fatal): %s", exc)

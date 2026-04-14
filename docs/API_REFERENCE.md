@@ -1,139 +1,192 @@
-# NaukariSaathi (ScamShield) - API Reference
+# ScamShield — API Reference
 
-Last updated: 2026-03-17
+Last updated: 2026-04-15
 
-This documents the APIs implemented in this repo:
-- Backend API (FastAPI): `backend/app`
-- AI Service (FastAPI): `ai-services`
-- Messaging (Twilio WhatsApp/SMS) webhook server: `whatsapp-bot`
-
-## Conventions
-
-- Backend JSON endpoints live under `/api`.
-- Media endpoints use `multipart/form-data` with a single file field named `file`.
-- Error responses follow standard FastAPI shapes unless otherwise noted:
-  - `{ "detail": "..." }`
+---
 
 ## Backend API (FastAPI)
 
-Default local base URL: `http://127.0.0.1:8000`
+Base URL (local): `http://127.0.0.1:8000`
 
-Health:
-- `GET /` -> `{ "message": "NaukariSaathi backend running" }`
-- `GET /health` -> `{ "status": "ok" }`
-- `GET /ai-health` -> `{ "ai_service": "online" | "offline" }`
-- `GET /health/redis` -> `{ "redis": "ok" | "down" }`
+### Health
+
+| Method | Endpoint | Response |
+|--------|----------|----------|
+| `GET` | `/` | `{"message": "NaukariSaathi backend running"}` |
+| `GET` | `/health` | `{"status": "ok"}` |
+| `GET` | `/health/redis` | `{"redis": "ok" \| "down"}` |
+
+> The `/ai-health` endpoint has been removed. The backend no longer calls an external AI service.
+
+---
 
 ### Analysis
 
 Router: `backend/app/routes/analyze.py`
 
-`POST /api/analyze`
-- Body:
+#### `POST /api/analyze`
+
+Body (`application/json`):
 ```json
 {
   "text": "string",
-  "source": "whatsapp | extension | browser_extension | dashboard | ... (optional)",
-  "phone_number": "string (optional, used for Redis rate-limit key)"
+  "source": "dashboard | extension | whatsapp (optional)",
+  "phone_number": "string (optional, used for rate-limit key)"
 }
 ```
-- Behavior:
-  - Rate limited (`10/minute` via SlowAPI + Redis limiter).
-  - Caches identical text payloads for 24 hours using Redis key `analysis:{sha256(text)}`.
 
-`POST /api/analyze/image`
-- Upload: `file` (image/*)
+- Rate limited: `10/minute` via SlowAPI + Redis.
+- Identical text payloads cached in Redis for 24 hours.
 
-`POST /api/analyze/audio`
-- Upload: `file` (audio/* or video/*)
+#### `POST /api/analyze/image`
+- `multipart/form-data`, field: `file` (`image/*`)
+- OCR via Tesseract + OpenCV → text → pipeline
 
-`POST /api/analyze/document`
-- Upload: `file` (PDF/DOCX)
+#### `POST /api/analyze/audio`
+- `multipart/form-data`, field: `file` (`audio/*` or `video/*`)
+- Transcription via Whisper → text → pipeline
 
-All analysis endpoints return normalized payload:
+#### `POST /api/analyze/document`
+- `multipart/form-data`, field: `file` (PDF/DOCX)
+- Extraction via pdfplumber/python-docx + forgery scoring → text → pipeline
+
+#### Unified Analysis Response
+
+All four analysis endpoints return the same schema:
+
 ```json
 {
-  "risk_score": 0.82,
+  "risk_score": 0.92,
   "risk_level": "HIGH",
-  "reasons": ["registration fee requested", "urgency language detected"],
+  "is_scam": true,
+  "verdict": "HIGH_RISK",
+  "confidence": 94,
+  "reasons": [
+    "Fee of ₹8,000 requested — illegal under eMigrate Act.",
+    "Company 'Global Career Solutions' is blacklisted in registry.",
+    "Claimed location Dubai does not match registered city Kolkata."
+  ],
+  "key_contradiction": "string | null",
+  "hindi_worker_message": "Yeh offer bilkul fraud hai — koi bhi paisa mat bhejiye.",
+  "english_summary": "string",
   "entities": {
-    "phone": ["9876543210"],
-    "salary": ["80000"],
-    "fee": ["8000"],
-    "company": "Example Co",
-    "location": "Bihar",
-    "upi": ["upi@bank"]
+    "phones": ["9876543210"],
+    "salary": 80000,
+    "fee": 8000,
+    "role": "Security Guard",
+    "location": "Dubai",
+    "company": "Global Career Solutions",
+    "upi_ids": ["glbljobs@paytm"],
+    "urgency_flags": ["urgent", "apply today"],
+    "has_fee": true,
+    "has_urgency": true
   },
-  "source": "ai-services | backend-rules"
+  "layer_scores": {
+    "embedding": 0.83,
+    "consistency_contradictions": 4,
+    "propagation": 0.65,
+    "llm_confidence": 94
+  },
+  "source": "dashboard",
+  "input_text": "string"
 }
 ```
 
-Notes:
-- High-risk results (`risk_score > 0.6`) are stored in Supabase (`scam_reports`) and graph edges are added to `scam_network_edges`.
+**`risk_level` thresholds:**
+- `< 0.35` → `"LOW"`
+- `0.35 – 0.65` → `"MEDIUM"`
+- `> 0.65` → `"HIGH"`
 
-### Dashboard / Reports
+**`verdict` is set by the LLM (Layer 4):**
+| Verdict | `risk_score` |
+|---------|-------------|
+| `LEGITIMATE` | 0.12 |
+| `SUSPICIOUS` | 0.52 |
+| `HIGH_RISK` | 0.92 |
+
+**High-risk storage:** results with `risk_score > 0.6` are automatically stored to `scam_reports` and network edges written to `scam_network_edges`.
+
+---
+
+### Dashboard & Reports
 
 Router: `backend/app/routes/scam_routes.py`
 
-- `POST /api/reports`
-- `GET /api/dashboard/stats`
-- `GET /api/dashboard/reports?limit=10`
-- `GET /api/dashboard/heatmap`
-- `GET /api/dashboard/trends?days=7`
-- `GET /api/dashboard/network`
-- `GET /api/lookup/phone/{phone}`
-- `GET /api/check-phone/{phone}`
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/reports` | Submit a manual scam report |
+| `GET` | `/api/dashboard/stats` | Aggregate statistics |
+| `GET` | `/api/dashboard/reports?limit=10` | Paginated recent reports |
+| `GET` | `/api/dashboard/heatmap` | Location-based heatmap data |
+| `GET` | `/api/dashboard/trends?days=7` | Report trend over time |
+| `GET` | `/api/dashboard/network` | Fraud network graph (nodes + edges) |
+| `GET` | `/api/lookup/phone/{phone}` | Phone reputation lookup |
+| `GET` | `/api/check-phone/{phone}` | Quick phone risk check |
 
-## AI Service (FastAPI)
+---
 
-Default local base URL: `http://127.0.0.1:8001`
+### Webhook (Backend-side)
 
-- `GET /health`
-- `POST /analyse/text`
-- `POST /analyse/image`
-- `POST /analyse/audio`
-- `POST /analyse/document`
+Router: `backend/app/routes/webhook_routes.py`
 
-Notes:
-- Backend calls AI service using `AI_SERVICE_URL` (default `http://localhost:8001`) in `backend/app/services/intelligence/ai_bridge.py`.
+#### `POST /whatsapp`
 
-## Messaging Server (Twilio WhatsApp/SMS)
+Receives Twilio WhatsApp webhooks directly at the backend layer (used when the backend is exposed directly or by the message worker). Validates `X-Twilio-Signature`.
 
-Run separately from backend (different process), usually on its own port.
+Form fields:
+- `Body` — message text
+- `From` — sender WhatsApp number
+- `NumMedia` — number of media attachments
+- `MediaUrl0` — first media URL
+- `MediaContentType0` — MIME type of first media
+- `ForwardedManyTimes` — Twilio forwarding flag (used by Layer 3)
 
-`POST /whatsapp`
-- Caller: Twilio WhatsApp webhook.
-- Form fields: `Body`, `From`, `NumMedia`, `MediaUrl0`, `MediaContentType0`.
-- Security: validates `X-Twilio-Signature` using `TWILIO_AUTH_TOKEN`.
-- Behavior:
-  - Enqueues payload to Redis queue `message_queue`.
-  - Returns immediately: `{ "status": "queued" }`.
+---
 
-## Backend Webhook Compatibility
+## WhatsApp Bot Server
 
-`POST /whatsapp`
-- Caller: Twilio WhatsApp webhook (legacy/backend-compatible entrypoint).
-- Behavior: same queueing behavior as messaging service endpoint.
+Base URL: `http://localhost:9000` (or your ngrok tunnel)
 
-`POST /sms`
-- Caller: Twilio SMS webhook.
-- Form fields: `Body`, `From`.
-- Behavior: calls backend `/api/analyze` and replies with a short SMS verdict.
+#### `POST /whatsapp`
 
-## Environment Variables
+Same form fields as backend webhook above. The bot:
+1. Validates `X-Twilio-Signature`.
+2. Sends an immediate "analyzing..." reply to the user.
+3. Enqueues job to Redis.
+4. Returns `{"status": "queued"}` to Twilio.
 
-Backend:
-- `SUPABASE_URL`
-- `SUPABASE_KEY`
-- `REDIS_URL`
-- `AI_SERVICE_URL` (default `http://localhost:8001`)
-- `AI_MEDIA_TIMEOUT` (default `30`)
-- `GROQ_API_KEY` (required only where LLM classifier is enabled)
-- `GROQ_MODEL` (optional; default `llama3-70b-8192`)
+The background `message_worker.py` process picks up the job, runs analysis, and sends the final verdict reply.
 
-WhatsApp/SMS server:
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_WHATSAPP_NUMBER`
-- `TWILIO_PHONE_NUMBER`
-- `BACKEND_API_BASE_URL` (default `http://127.0.0.1:8000`)
+#### `POST /sms`
+
+Form fields: `Body`, `From`.  
+Synchronously calls `POST /api/analyze` on the backend and replies with a short SMS verdict.
+
+---
+
+## Environment Variables Reference
+
+### Backend (`backend/.env` or root `.env`)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SUPABASE_URL` | ✅ | — | Supabase project URL |
+| `SUPABASE_KEY` | ✅ | — | Supabase anon or service key |
+| `REDIS_URL` | ✅ | — | Redis connection string |
+| `GROQ_API_KEY` | ✅ | — | Groq API key for Layer 4 LLM |
+| `TWILIO_ACCOUNT_SID` | ⚡ webhook | — | Twilio account SID |
+| `TWILIO_AUTH_TOKEN` | ⚡ webhook | — | Twilio auth token (signature validation) |
+| `TWILIO_WHATSAPP_NUMBER` | ⚡ webhook | — | Sender, e.g. `whatsapp:+14155238886` |
+| `GROQ_INVESTIGATOR_MODEL` | ❌ | `llama-3.3-70b-versatile` | Override LLM model |
+| `TESSERACT_CMD` | ❌ | System default | Path to Tesseract binary (Windows) |
+
+### WhatsApp Bot (`whatsapp-bot/.env`)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TWILIO_ACCOUNT_SID` | ✅ | Must match root `.env` |
+| `TWILIO_AUTH_TOKEN` | ✅ | Must match root `.env` |
+| `TWILIO_WHATSAPP_NUMBER` | ✅ | Sender number |
+| `BACKEND_API_BASE_URL` | ❌ | Default: `http://127.0.0.1:8000` |
+
+> `AI_SERVICE_URL` is **deprecated and removed**. Do not set it.

@@ -142,6 +142,8 @@ def store_report_edges(entities: dict[str, Any]) -> None:
     """Create graph edges for co-occurring entities in a single report."""
     phones = entities.get("phone") if isinstance(entities.get("phone"), list) else []
     upis = entities.get("upi") if isinstance(entities.get("upi"), list) else []
+    if not upis and isinstance(entities.get("upi_ids"), list):
+        upis = entities.get("upi_ids")
 
     agent_value = entities.get("agent")
     agents: list[str] = []

@@ -4,6 +4,8 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from app.services.graph.db_cross_checker import check_entity_consistency_against_db
+
 _PHONE_RE = re.compile(r"^\+?[0-9]{10,15}$")
 
 
@@ -250,4 +252,41 @@ def check_consistency(graph: dict[str, Any]) -> dict[str, Any]:
         "contradictions": contradictions,
         "checks": checks,
         "consistency_score": _safe_float(contradictions, checks),
+    }
+
+
+def run_full_consistency_check(entities: dict[str, Any], graph: dict[str, Any]) -> dict[str, Any]:
+    """
+    Merge graph-structure consistency with DB-backed cross-reference checks.
+    """
+    graph_result = check_consistency(graph or {"nodes": [], "edges": []})
+    try:
+        db_result = check_entity_consistency_against_db(entities or {})
+    except Exception:
+        db_result = {
+            "db_contradictions": 0,
+            "db_checks_run": 0,
+            "contradiction_details": [],
+            "company_found_in_registry": False,
+            "company_is_blacklisted": False,
+            "typosquatting_suspected": False,
+            "typosquatting_target": None,
+        }
+
+    total_contradictions = int(graph_result.get("contradictions") or 0) + int(db_result.get("db_contradictions") or 0)
+    total_checks = int(graph_result.get("checks") or 0) + int(db_result.get("db_checks_run") or 0)
+
+    return {
+        "contradictions": total_contradictions,
+        "checks": total_checks,
+        "consistency_score": _safe_float(total_contradictions, total_checks),
+        "graph_contradictions": graph_result.get("contradictions", 0),
+        "graph_checks": graph_result.get("checks", 0),
+        "db_contradictions": db_result.get("db_contradictions", 0),
+        "db_checks_run": db_result.get("db_checks_run", 0),
+        "contradiction_details": db_result.get("contradiction_details", []),
+        "company_found_in_registry": db_result.get("company_found_in_registry", False),
+        "company_is_blacklisted": db_result.get("company_is_blacklisted", False),
+        "typosquatting_suspected": db_result.get("typosquatting_suspected", False),
+        "typosquatting_target": db_result.get("typosquatting_target"),
     }

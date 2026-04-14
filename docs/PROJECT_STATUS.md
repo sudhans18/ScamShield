@@ -1,144 +1,166 @@
-# NaukariSaathi (ScamShield) - Project Status Report
+# ScamShield — Project Status
 
-Assessment date: 2026-03-16
+Last updated: 2026-04-15
 
-This report is based on:
-- Project spec: `docs/NaukariSaathi_Full_Report.pdf` (Hackathon Project Report 2025-26)
-- Codebase snapshot under `C:\Projects\ScamShield`
+---
 
-## Executive Summary
+## What Changed: Intelligence Architecture Overhaul
 
-You have a working end-to-end core of the platform:
-- A FastAPI backend exposing analysis + dashboard APIs (and persisting high-risk cases to Supabase).
-- A separate FastAPI AI service handling text/image/audio/document analysis (OCR + Whisper + LLM classification + entity extraction).
-- A Twilio WhatsApp webhook service that forwards text/media to the backend and replies in Hindi.
-- A React dashboard that visualizes Supabase-backed stats, recent reports, heatmap, trends, and a D3 network graph.
+The entire intelligence layer was replaced in April 2026. The old dual-process architecture (`backend` + `ai-services`) has been consolidated into a single backend process running a 4-layer AI pipeline.
 
-The major remaining work (to fully match the PDF) is around:
-- Browser extension “auto-badge” UX and channel-specific DOM integrations (Facebook/OLX/Indeed/etc).
-- Proactive pattern detection + district broadcast alerts.
-- QR Trust Verification System (signed QR issuance + verification endpoints + UI workflow).
-- Field Worker PWA (offline-first case management and bulk verification).
-- Hardening/security/config (secrets in env, CORS tightening, rate limiting parity, caching).
+### Before → After
 
-## Completion By Spec Component (PDF “Nine Functional Components”)
+| | Before | After |
+|-|--------|-------|
+| **Processes** | 2 (backend:8000 + ai-services:8001) | 1 (backend:8000 only) |
+| **Intelligence** | Rule-based (`scam_rules.py`) + optional Groq LLM | 4-layer pipeline (Embedding + Graph + Propagation + LLM) |
+| **OCR/Audio/Doc** | `ai-services/` microservice | `backend/app/services/media/` (in-process) |
+| **Entity extraction** | Two separate extractors (backend + ai-services) | Single upgraded `entity_extractor.py` |
+| **Company checks** | MCA API stubs (never worked) | Supabase mock eMigrate registry (seeded, works) |
+| **Propagation** | Not implemented | SHA-256 fingerprinting + Supabase `message_fingerprints` |
+| **LLM role** | Feature-matcher fallback | Chain-of-thought investigator with full evidence bundle |
 
-Percentages are pragmatic: “is there an end-to-end demo that matches the spec intent?”.
+### Old files deleted
+- `ai-services/` — entire directory removed
+- `backend/app/services/intelligence/scam_rules.py`
+- `backend/app/services/intelligence/risk_scorer.py`
+- `backend/app/services/intelligence/analyzer.py`
+- `backend/app/services/intelligence/llm_classifier.py`
 
-1. WhatsApp Bot (Twilio webhook, Hindi response): **~80%**
-   - Implemented: `whatsapp-bot/bot.py` webhook (`POST /whatsapp`), Twilio signature validation, async background analysis, Hindi response formatting, supports media (image/audio/document) and text.
-   - Gaps: multi-language responses beyond Hindi; richer “verified agency” messaging; opt-in onboarding UX; structured conversation flows (buttons/quick replies).
+---
 
-2. SMS / IVR Gateway: **~40%**
-   - Implemented: `whatsapp-bot/bot.py` includes `POST /sms` webhook that returns a short risk summary.
-   - Gaps: IVR/call flow not implemented; “CHECK <number>” shortcode workflow not productized; sender verification and throttling aligned to spec.
+## Component Completion Status
 
-3. Browser Extension: **~30%**
-   - Implemented: `browser-extension/content.js` + `popup.js` send page text to backend `/api/analyze`; alerts on high risk.
-   - Important: `browser-extension/background.js` is currently JSON (not JavaScript). With manifest v3 this will break the service worker load. Either delete the background worker reference or replace it with valid JS.
-   - Gaps: real-time page badges (“verified / risky”) and post-level highlighting; channel-specific selectors for Facebook/OLX/Indeed; URL/domain intelligence pipeline; performance (avoid sending entire page text); configurable backend URL; safe UX (no blocking alerts).
+### 1. WhatsApp Bot — **~85%**
 
-4. Scam NLP Classifier (multilingual): **~70%**
-   - Implemented:
-     - AI service classifier + entity extraction pipeline (`ai-services/main_service.py`, `ai-services/models/scam_classifier.py`, `ai-services/entity_extractor.py`).
-     - Backend fallback rules + optional Groq LLM classifier for ambiguous cases (`backend/app/services/intelligence/*`).
-   - Gaps: explicit evaluation harness / “30 test scam messages” benchmark; robust language normalization/translation layer (PDF references IndicTrans2).
+✅ Implemented:
+- Twilio webhook (`POST /whatsapp`) with signature validation + ngrok-aware URL reconstruction
+- Full bilingual responses (Hindi + English), auto-language detection (Devanagari + Romanized Hindi tokens)
+- Media forwarding: image, audio, document all wired through pipeline
+- `ForwardedManyTimes` Twilio flag passed to Layer 3 propagation scorer
+- Redis queue: bot enqueues, `message_worker.py` dequeues + replies
+- "Please wait..." immediate ack before analysis begins
 
-5. Document Forgery Detector: **~70%**
-   - Implemented: `ai-services/doc_pipeline.py` + backend `POST /api/analyze/document` + WhatsApp bot media forwarding.
-   - Gaps: stable MCA/eMigrate integrations in production; clearer “forgery reasons” surfaced consistently; stronger doc-type coverage; production dependencies (Poppler/Tesseract) verification.
+🔲 Remaining:
+- Structured conversation flows (WhatsApp buttons / quick-reply templates)
+- Opt-in onboarding UX for new users
+- Multi-language beyond Hindi/English
 
-6. Voice Note Analyser (Whisper): **~70%**
-   - Implemented: `ai-services/audio_pipeline.py` (Whisper), backend `POST /api/analyze/audio`, WhatsApp bot forwards audio/video.
-   - Gaps: reliability/perf (model size selection, caching strategy, hardware considerations), more “tone/urgency” features as spec suggests.
+---
 
-7. Intelligence Dashboard: **~75%**
-   - Implemented:
-     - UI: `dashboard/src/pages/Dashboard.jsx` + components (heatmap, trends, network graph, reports table).
-     - APIs: `backend/app/routes/scam_routes.py` and `backend/app/services/dashboard_service.py`.
-     - Phone lookup page: `dashboard/src/pages/PhoneLookup.jsx`.
-   - Gaps: “FIR export” (PDF mentions PDF/API export); “district risk index”; real-time feed; admin moderation/appeal workflow; verified agency registry UI.
+### 2. SMS / IVR Gateway — **~40%**
 
-8. QR Trust Verification System: **~0-10%**
-   - Implemented: only incidental QR masking to improve OCR (not trust system).
-   - Missing: QR signing (HMAC/private key), issuance for verified agencies, verify endpoint + verification UI, badge display across bot/extension.
+✅ Implemented:
+- `POST /sms` endpoint in `whatsapp-bot/bot.py` — returns short risk summary
 
-9. Field Worker PWA: **~0%**
-   - Missing: offline-first PWA for NGOs, bulk verification workflows, case management, district alert feed.
+🔲 Remaining:
+- IVR/call flow not implemented
+- Outbound shortcode "CHECK <number>" workflow
 
-## What’s Implemented Today (Concrete Inventory)
+---
 
-### Backend (FastAPI) - `backend/app`
-- Entrypoint: `backend/app/main.py`
-- Routers:
-  - `backend/app/routes/analyze.py`
-  - `backend/app/routes/scam_routes.py`
-- Key endpoints (high level):
-  - `POST /api/analyze` (text)
-  - `POST /api/analyze/image` (multipart upload)
-  - `POST /api/analyze/audio` (multipart upload)
-  - `POST /api/analyze/document` (multipart upload)
-  - `POST /api/reports` (manual report insert)
-  - `GET /api/dashboard/*` (stats/reports/heatmap/trends/network)
-  - `GET /api/lookup/phone/{phone}` and `GET /api/check-phone/{phone}`
-- Persistence:
-  - High-risk analysis gets stored to Supabase via `store_analysis_report()` and edges via `store_report_edges()`.
-  - Phone reputation table is updated on insert/upsert (`backend/app/services/reputation/phone_reputation.py`).
-- Rate limiting:
-  - `POST /api/analyze` has a SlowAPI limit of `10/minute` (other endpoints currently do not).
+### 3. Browser Extension — **~30%**
 
-### AI Services (FastAPI) - `ai-services`
-- Entrypoint: `ai-services/main_service.py`
-- Endpoints:
-  - `POST /analyse/text`
-  - `POST /analyse/image`
-  - `POST /analyse/audio`
-  - `POST /analyse/document`
-  - `GET /health`
-- Capabilities:
-  - OCR/image processing pipeline (large, multi-step) in `ai-services/image_pipeline.py`
-  - Document pipeline with extraction + verification hooks in `ai-services/doc_pipeline.py`
-  - Whisper-based transcription in `ai-services/audio_pipeline.py`
-  - Entity extraction in `ai-services/entity_extractor.py`
-  - Validation module (`ai-services/validator.py`) contains trust/decay/rate-limit logic from the PDF spec, but it is not clearly wired into the backend persistence model yet.
+✅ Implemented:
+- Content script sends page text to `POST /api/analyze`
+- Popup shows risk verdict
 
-### WhatsApp Bot (Twilio) - `whatsapp-bot`
-- FastAPI app: `whatsapp-bot/bot.py`
-- Endpoints:
-  - `POST /whatsapp` Twilio WhatsApp webhook (signature validated)
-  - `POST /sms` Twilio SMS webhook (basic demo)
-- Forwards user content to backend analysis endpoints and sends a Hindi verdict back.
+🔲 Remaining:
+- Per-post DOM badges (Facebook/OLX/Indeed selectors)
+- URL/domain intelligence
+- Non-blocking UX (currently uses `alert()`)
 
-### Browser Extension - `browser-extension`
-- Manifest v3 content script that extracts page text and calls backend `POST /api/analyze`.
-- Current UX is alert-based; no DOM badges/highlighting yet.
+---
 
-### Dashboard - `dashboard`
-- React + Vite + Tailwind UI
-- Talks to backend via `VITE_API_BASE_URL` (default `/api`).
+### 4. Scam NLP Classifier — **~90%** *(was ~70%)*
 
-## Key Gaps To Close (Prioritized)
+✅ Implemented (new):
+- **Layer 1 — Semantic Embedding (LaBSE):** `embedding_scorer.py` — measures geometric distance from scam/legitimate centroids in 768-dim vector space
+- **Layer 2 — Cross-Reference Consistency Graph:** `db_cross_checker.py` — 7 checks against mock eMigrate registry (fuzzy match, blacklist, typosquatting, location, role, Gulf placement, phone prefix)
+- **Layer 3 — Propagation Analysis:** `propagation_analyzer.py` — SHA-256 fingerprinting, seen count tracking, Twilio forwarded flag scoring
+- **Layer 4 — LLM Chain-of-Thought Investigator:** `llm_investigator.py` — 5-step investigative prompt with full structured evidence bundle; Groq LLaMA-3.3-70B
+- Entity extractor upgraded: UPI IDs, urgency flags, `has_fee`, `has_urgency`
 
-### P0 (Must fix for a reliable demo / security hygiene)
-- Move Supabase credentials out of source code:
-  - `backend/app/services/supabase_client.py` hardcodes `SUPABASE_URL` and `SUPABASE_KEY`.
-- Tighten CORS and origins (backend + AI service currently allow all origins).
-- Align rate limiting to the PDF security layer:
-  - Apply consistent limits to analysis + reporting endpoints; add per-number/per-IP protections.
-- Standardize response schemas and error handling between backend and AI service.
+🔲 Remaining:
+- Formal evaluation harness (benchmark on 30+ real scam messages)
+- IndicTrans2 translation layer for regional Indian languages
 
-### P1 (To match the PDF “wow moments”)
-- Browser extension auto-badging per job post (Facebook/OLX/Indeed) instead of a page-level alert.
-- FIR/PDF export from dashboard (PDF mentions export for cyber cells).
-- Proactive pattern detection + scheduled alerts (PDF “cron every 6h” + district broadcast).
-- Seed/demo data tooling: one command to seed Supabase with realistic reports and edges.
+---
 
-### P2 (Big features not yet started)
-- QR Trust Verification System (issuance + verification + badges across surfaces).
-- Field Worker PWA (offline-first bulk verify + case management).
-- Telegram bot channel (PDF lists it; not present in this repo).
+### 5. Document Forgery Detector — **~75%** *(was ~70%)*
 
-## Notes / Risks
+✅ Implemented:
+- `backend/app/services/media/doc_pipeline.py` — PDF/DOCX extraction, forgery scoring, typosquatting detection against known company names
+- MCA stubs fully removed — replaced by Layer 2 DB registry lookup
+- Forgery reasons and typosquatting results passed as `media_context` to Layer 4 LLM
 
-- There is duplicated intelligence logic across backend (`backend/app/services/intelligence/*`) and AI service (`ai-services/*`). That’s fine for a hackathon, but long-term you likely want “one source of truth” for scoring and entity schemas.
-- Some AI-service files contain non-ASCII mojibake sequences (for example “â€””). It does not break Python execution, but it makes diffs/reviews harder and can indicate encoding mismatches.
+🔲 Remaining:
+- Broader document type coverage (image-scanned PDFs at low resolution)
+- Production Tesseract/Poppler verification on non-Windows
+
+---
+
+### 6. Voice Note Analyser — **~70%**
+
+✅ Implemented:
+- `backend/app/services/media/audio_pipeline.py` + `whisper_transcriber.py` (lazy-loaded)
+- Whisper model loaded on first use, not at startup (avoids slow boot)
+
+🔲 Remaining:
+- Audio model size selection (currently defaults to `base`)
+- Tone/urgency prosody features
+
+---
+
+### 7. Intelligence Dashboard — **~75%**
+
+✅ Implemented:
+- Stats, recent reports, heatmap, trends, D3 network graph
+- Phone lookup page
+- All APIs backed by Supabase
+
+🔲 Remaining:
+- FIR/PDF export
+- Real-time feed (currently polling)
+- District risk index
+- Admin moderation workflow
+
+---
+
+### 8. QR Trust Verification — **~0%**
+
+🔲 Not started.
+- QR signing (HMAC/private key), issuance for verified agencies, verify endpoint + UI
+
+---
+
+### 9. Field Worker PWA — **~0%**
+
+🔲 Not started.
+- Offline-first PWA, bulk verification, case management
+
+---
+
+## Infrastructure Status
+
+| Item | Status |
+|------|--------|
+| Single-process backend | ✅ Done — no ai-services process |
+| pgvector extension | ✅ Enabled in Supabase |
+| Intelligence layer tables | ✅ In `backend/sql/intelligence_layer_tables.sql` |
+| Seed mock data script | ✅ `scripts/seed_mock_data.py` — ~50 companies, ~45 prefixes |
+| Centroid builder script | ✅ `scripts/compute_centroids.py` |
+| Redis queue for async analysis | ✅ `message_worker.py` consumes jobs |
+| Twilio 403 fix (ngrok) | ✅ URL reconstructed from forwarded headers |
+| WhatsApp bot env credentials | ✅ Aligned to root `.env` |
+| Syndicate detector | ✅ Runs fire-and-forget after each analysis |
+| Graph service | ✅ Stores entity co-occurrence edges |
+
+---
+
+## Known Limitations
+
+- **LaBSE centroids must be pre-seeded.** If `cluster_centroids` table is empty, Layer 1 returns `embedding_score: 0.5` (neutral) until `compute_centroids.py` has been run.
+- **Company registry is mock data.** Real eMigrate API integration is out of scope (API is not publicly accessible). The 50-row seed covers demo scenarios well.
+- **Groq API key required.** The system degrades gracefully if Groq fails (returns `SUSPICIOUS` at 0.52 with error logged), but Layer 4 is the verdict authority — without it the pipeline is significantly weaker.
+- **Whisper + LaBSE are large models.** First startup after fresh install will download ~500 MB (LaBSE) + Whisper model. Subsequent starts use disk cache.

@@ -211,6 +211,11 @@ def _detect_media_endpoint(content_type: str) -> str | None:
     return None
 
 
+def _parse_bool(value: str | None) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "y"}
+
+
 def _analyze_text(text: str) -> dict[str, Any]:
     response = requests.post(
         f"{BACKEND_BASE_URL}/api/analyze",
@@ -290,8 +295,20 @@ async def whatsapp_webhook(
     NumMedia: str = Form(default="0"),
     MediaUrl0: str = Form(default=""),
     MediaContentType0: str = Form(default=""),
+    ForwardedManyTimes: str = Form(default=""),
 ):
-    url = str(request.url)
+    # Reconstruct the public URL that Twilio actually signed.
+    # When running behind ngrok, request.url is the internal http://127.0.0.1
+    # URL but Twilio signs against the public https:// URL — causing 403s.
+    forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    forwarded_host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host")
+    if forwarded_proto and forwarded_host:
+        url = f"{forwarded_proto}://{forwarded_host}{request.url.path}"
+        if request.url.query:
+            url += f"?{request.url.query}"
+    else:
+        url = str(request.url)
+
     signature = request.headers.get("X-Twilio-Signature", "")
     form_data = dict(await request.form())
 
@@ -355,6 +372,7 @@ async def whatsapp_webhook(
             "media_count": media_count,
             "media_url": MediaUrl0,
             "media_content_type": MediaContentType0,
+            "forwarded_many_times": _parse_bool(ForwardedManyTimes),
         }
     )
 

@@ -158,7 +158,7 @@ def _build_localized_response(result: dict[str, Any], language: str) -> str:
             advice = "फिलहाल जोखिम कम लगता है, फिर भी सत्यापन करके ही निर्णय लें।"
         reasons_text = "\n".join(f"* {item}" for item in localized_reasons) if localized_reasons else "* कोई स्पष्ट रेड फ्लैग नहीं मिला"
         return (
-            "*NaukariSaathi - जॉब सेफ्टी चेक*\n"
+            "*ScamShield - जॉब सेफ्टी चेक*\n"
             "-------------------------------\n"
             f"वर्डिक्ट: {verdict}\n"
             f"रिस्क स्कोर: {score}%\n\n"
@@ -179,7 +179,7 @@ def _build_localized_response(result: dict[str, Any], language: str) -> str:
         advice = "Risk appears low, but still verify details before you act."
     reasons_text = "\n".join(f"* {item}" for item in localized_reasons) if localized_reasons else "* No clear red flags found"
     return (
-        "*NaukariSaathi - Job Safety Check*\n"
+        "*ScamShield - Job Safety Check*\n"
         "-------------------------------\n"
         f"Verdict: {verdict}\n"
         f"Risk Score: {score}%\n\n"
@@ -208,6 +208,7 @@ async def process_message(job: dict[str, Any]) -> None:
     media_url = str(job.get("media_url") or "")
     media_content_type = str(job.get("media_content_type") or "")
     media_count = int(job.get("media_count") or 0)
+    forwarded_many_times = bool(job.get("forwarded_many_times") or False)
     preferred_language = str(job.get("preferred_language") or "")
 
     if not from_number:
@@ -226,7 +227,11 @@ async def process_message(job: dict[str, Any]) -> None:
             else:
                 result = await analyze_document_with_ai(filename, content, media_content_type, source_channel="whatsapp")
         elif body_text.strip():
-            result = await analyze_text_with_ai(body_text, source_channel="whatsapp")
+            result = await analyze_text_with_ai(
+                body_text,
+                source_channel="whatsapp",
+                forwarded_many_times=forwarded_many_times,
+            )
         else:
             result = {"risk_score": 0.0, "reasons": ["Empty input"]}
     except Exception as exc:
